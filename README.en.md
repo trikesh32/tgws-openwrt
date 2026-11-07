@@ -1,4 +1,6 @@
 > Fork packaging: the daemon is now a separate `tgws` APK dependency of
+
+Cloudflare Worker transport (0.1.3+): [setup guide (Russian)](worker/README.ru.md), [Worker source](worker/worker.mjs). Configure a Worker domain and optional access token in LuCI; clear the domain to disable it.
 > `luci-app-tgws`. Ready APKs currently target `aarch64_cortex-a53` / OpenWrt 25.12.6.
 > The installer requires an APK matching the exact OpenWrt architecture; raw
 > cross-built binaries are not installed outside the package manager.

@@ -106,6 +106,9 @@ jobs:
             if (failed) process.exit(1);
           ' packages/luci-app-tgws/htdocs/luci-static/resources/view/tgws/*.js
 
+      - name: Cloudflare Worker tests
+        run: node --experimental-vm-modules --test worker/worker.test.mjs
+
       # Вызов функции из модуля ucode без import — ошибка времени выполнения,
       # которую проверка синтаксиса не видит.
       - name: ucode module imports

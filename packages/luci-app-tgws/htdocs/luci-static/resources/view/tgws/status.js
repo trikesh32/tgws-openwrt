@@ -117,6 +117,7 @@ return view.extend({
 				rows.push(row(_('Running for'), fmtDuration(Math.max(0, (s.updated || s.started) - s.started))));
 		}
 
+		rows.push(row(_('Cloudflare Worker'), st.worker_domain || _('off')));
 		rows.push(row(_('WebSocket targets'),
 			st.dc_ip === 'none' ? _('none: everything goes the direct way') : E('code', {}, st.dc_ip)));
 		rows.push(row(_('Other Telegram traffic'),
@@ -135,6 +136,8 @@ return view.extend({
 			rows.push(row(_('Through WebSocket'),
 				(s.ws || 0) + (s.total > 0 ? ' (' + share + '%)' : '')));
 			rows.push(row(_('Passed through directly'), String(s.fallback || 0)));
+			rows.push(row(_('Through Cloudflare Worker'), String(s.worker || 0)));
+			rows.push(row(_('Worker connection errors'), String(s.worker_errors || 0)));
 			rows.push(row(_('Sent / received'), fmtBytes(s.bytes_up) + ' / ' + fmtBytes(s.bytes_down)));
 			var unknown = s.unknown_dc || [];
 			if (unknown.length)

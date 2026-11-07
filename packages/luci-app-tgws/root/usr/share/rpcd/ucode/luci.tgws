@@ -47,7 +47,7 @@ function shq(s) {
 // заметны. Значения приходят в виде tgws.main.port='5454'.
 function config() {
 	let cfg = { enabled: '0', port: '5454', dc_ip: '2:149.154.167.220,4:149.154.167.220',
-	            ip_dc: '', lan_devices: '', fallback_mark: '', subnets_url: '' };
+	            ip_dc: '', lan_devices: '', fallback_mark: '', subnets_url: '', worker_domain: '' };
 	let r = sh_out('uci -q show tgws.main');
 	for (let line in split(r.out, '\n')) {
 		let m = match(line, /^tgws\.main\.([a-z_]+)='(.*)'$/);
@@ -195,16 +195,22 @@ function ws_targets(cfg) {
 // Проверка WebSocket для списка целей. Цели проверяются ПАРАЛЛЕЛЬНО: каждая
 // занимает до нескольких секунд, а ubus ждёт ответа ограниченное время, и
 // последовательный прогон нескольких DC его бы исчерпал.
-function probe_targets(targets, media) {
+function probe_targets(targets, media, cfg) {
 	if (!length(targets))
 		return [];
 	let dir = trim(sh_out('mktemp -d').out);
 	if (!length(dir) || substr(dir, 0, 5) != '/tmp/')
 		return [];
 	let cmd = '';
+	let worker_args = '';
+	if (length(cfg?.worker_domain ?? '')) {
+		worker_args = ' -worker-domain ' + shq(cfg.worker_domain);
+		if (access('/var/run/tgws-worker.token'))
+			worker_args += ' -worker-token-file /var/run/tgws-worker.token';
+	}
 	for (let t in targets)
 		cmd += shq(BIN) + ' -probe -dc ' + int(t.dc) + ' -target ' + shq(t.ip) +
-			(media ? ' -media' : '') + ' > ' + shq(dir + '/' + t.dc) + ' 2>/dev/null & ';
+			(media ? ' -media' : '') + worker_args + ' > ' + shq(dir + '/' + t.dc) + ' 2>/dev/null & ';
 	sh(cmd + 'wait');
 	let out = [];
 	for (let t in targets) {
@@ -218,6 +224,13 @@ function probe_targets(targets, media) {
 	}
 	sh('rm -rf ' + shq(dir));
 	return out;
+}
+
+function active_probe_targets(cfg) {
+	// The Worker connects to the real DC, not the Telegram WebSocket gateway.
+	if (length(cfg.worker_domain))
+		return [ { dc: 2, ip: '149.154.167.51' }, { dc: 4, ip: '149.154.167.91' } ];
+	return ws_targets(cfg);
 }
 
 // Зоны файрвола как строки "имя|input|сети": по ним проверяется, принимает ли
@@ -278,6 +291,7 @@ return {
 				port: cfg.port,
 				dc_ip: cfg.dc_ip,
 				ip_dc: cfg.ip_dc,
+				worker_domain: cfg.worker_domain,
 				fallback_mark: cfg.fallback_mark,
 				lan_devices: cfg.lan_devices,
 				subnets: { count: sub.count, custom: sub.custom, updated: sub.updated },
@@ -353,10 +367,10 @@ return {
 			let cfg = config();
 			if (!access(BIN))
 				return { error: 'not installed' };
-			let targets = ws_targets(cfg);
+			let targets = active_probe_targets(cfg);
 			if (!length(targets))
 				return { error: 'no WebSocket targets configured', results: [] };
-			return { results: probe_targets(targets, false) };
+			return { results: probe_targets(targets, false, cfg) };
 		}
 	},
 
@@ -441,13 +455,13 @@ return {
 			add('network', 'ipv6', v6 > 0 ? 'warn' : 'ok', v6 > 0 ? '' + v6 : '');
 
 			// --- Telegram ---
-			let targets = ws_targets(cfg);
+			let targets = active_probe_targets(cfg);
 			if (!installed)
 				add('telegram', 'websocket', 'skip', '');
 			else if (!length(targets))
 				add('telegram', 'websocket', 'skip', 'none');
 			else {
-				for (let p in probe_targets(targets, false)) {
+				for (let p in probe_targets(targets, false, cfg)) {
 					let ok = 0, ms = null, err = '';
 					for (let r in p.results) {
 						if (r.ok) {
@@ -483,7 +497,7 @@ return {
 				let unk = stats.unknown_dc ?? [];
 				if (length(unk))
 					add('telegram', 'unknown_dc', 'warn', join(', ', unk));
-				if ((stats.total ?? 0) >= 20 && (stats.ws ?? 0) == 0)
+				if ((stats.total ?? 0) >= 20 && (stats.ws ?? 0) == 0 && (stats.worker ?? 0) == 0)
 					add('telegram', 'ws_unused', 'warn', '' + stats.total);
 			}
 

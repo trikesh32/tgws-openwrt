@@ -51,6 +51,8 @@ config_get() {
 		lan_devices) eval "$1=\${U_LAN:-$4}" ;;
 		fallback_mark) eval "$1=\${U_FB:-$4}" ;;
 		ip_dc) eval "$1=\${U_IPDC:-$4}" ;;
+		worker_domain) eval "$1=\${U_WORKER:-$4}" ;;
+		worker_token) eval "$1=\${U_TOKEN:-$4}" ;;
 		*) eval "$1=\"$4\"" ;;
 	esac
 }
@@ -83,7 +85,7 @@ daemon_up() { echo '{}' > "$STATS"; }
 reset() {
 	: > "$CALLS"
 	rm -f "$CALLS.ruleset" "$STATS"
-	U_ENABLED=0; U_PORT=; U_DC_IP=; U_LAN=; U_FB=; U_IPDC=
+	U_ENABLED=0; U_PORT=; U_DC_IP=; U_LAN=; U_FB=; U_IPDC=; U_WORKER=; U_TOKEN=
 	NFT_RC=0; export NFT_RC
 	TGWS_CHECK_RC=0; export TGWS_CHECK_RC
 }
@@ -154,6 +156,25 @@ assert_eq "1" "$rc" "fallback mark the daemon rejects: start_service fails"
 assert_eq "0" "$(calls | grep -c procd_open_instance)" "fallback mark the daemon rejects: no respawn loop"
 
 # --- свой порт и недопустимые значения -------------------------------------
+reset
+U_ENABLED=1; U_WORKER=relay.example.workers.dev; U_TOKEN=0123456789abcdef0123456789abcdef
+start_service; rc=$?
+assert_eq "0" "$rc" "worker: starts"
+assert_contains "$(calls)" "-worker-domain relay.example.workers.dev" "worker: domain passed"
+assert_contains "$(calls)" "-worker-token-file $RUN/tgws-worker.token" "worker: token file passed"
+assert_contains "$(calls)" "mount-ro $RUN/tgws-worker.token" "worker: token mounted read-only"
+assert_contains "$(calls)" "/etc/resolv.conf" "worker: jail can resolve domain"
+assert_eq "$U_TOKEN" "$(cat "$RUN/tgws-worker.token")" "worker: token file contents"
+assert_eq "0" "$(calls | grep -c "$U_TOKEN")" "worker: secret absent from procd arguments and logs"
+stop_service
+assert_eq "0" "$(test -f "$RUN/tgws-worker.token" && echo 1 || echo 0)" "worker: stop removes token"
+
+reset
+U_ENABLED=1; U_WORKER=relay.example.workers.dev; TGWS_CHECK_RC=2; export TGWS_CHECK_RC
+start_service; rc=$?
+assert_eq "1" "$rc" "worker: rejected config does not start"
+assert_eq "0" "$(calls | grep -c procd_open_instance)" "worker: no respawn for bad config"
+
 reset
 U_ENABLED=1; U_PORT=6000
 start_service

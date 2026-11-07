@@ -2,7 +2,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-tgws
-PKG_VERSION:=0.1.2
+PKG_VERSION:=0.1.3
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=tgws-openwrt contributors
@@ -28,6 +28,7 @@ include $(TOPDIR)/feeds/luci/luci.mk
 # записывает все файлы как 100644. Скрипт без бита исполнения procd запустить
 # не может, и на роутере это выглядит как служба без единой строки в журнале.
 define Build/Compile
+	chmod 0600 $(PKG_BUILD_DIR)/root/etc/config/tgws
 	chmod 0755 $(PKG_BUILD_DIR)/root/etc/init.d/tgws
 	chmod 0755 $(PKG_BUILD_DIR)/root/etc/uci-defaults/40-luci-tgws
 	chmod 0755 $(PKG_BUILD_DIR)/root/usr/libexec/tgws/gen-nft

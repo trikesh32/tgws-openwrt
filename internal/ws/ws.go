@@ -59,16 +59,21 @@ func (e *HandshakeError) Redirect() bool {
 
 // Dialer описывает одно подключение.
 type Dialer struct {
-	Addr       string      // host:port, куда идёт TCP (IP дата-центра)
-	ServerName string      // SNI и заголовок Host (kws2.web.telegram.org)
-	Path       string      // /apiws
-	TLS        *tls.Config // nil — настройки по умолчанию; в тестах свой пул
-	Mark       int         // SO_MARK, 0 — без метки
-	Timeout    time.Duration
+	Addr        string      // host:port, куда идёт TCP (IP дата-центра)
+	ServerName  string      // SNI и заголовок Host (kws2.web.telegram.org)
+	Path        string      // /apiws
+	TLS         *tls.Config // nil — настройки по умолчанию; в тестах свой пул
+	Mark        int         // SO_MARK, 0 — без метки
+	Timeout     time.Duration
+	BearerToken string // optional Worker authentication; never put secrets in URLs
+	ReadTimeout time.Duration
 }
 
 // Dial устанавливает TCP, TLS и выполняет апгрейд.
 func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
+	if strings.ContainsAny(d.BearerToken, "\r\n") || strings.ContainsAny(d.ServerName, "\r\n ") || strings.ContainsAny(d.Path, "\r\n ") {
+		return nil, errors.New("ws: invalid request field")
+	}
 	if d.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, d.Timeout)
@@ -106,7 +111,11 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 		"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + key + "\r\n" +
 		"Sec-WebSocket-Version: 13\r\n" +
-		"Sec-WebSocket-Protocol: binary\r\n\r\n"
+		"Sec-WebSocket-Protocol: binary\r\n"
+	if d.BearerToken != "" {
+		req += "Authorization: Bearer " + d.BearerToken + "\r\n"
+	}
+	req += "\r\n"
 	if _, err := io.WriteString(tc, req); err != nil {
 		raw.Close()
 		return nil, err
@@ -153,7 +162,7 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 	}
 
 	_ = tc.SetDeadline(time.Time{})
-	return &Conn{c: tc, br: br}, nil
+	return &Conn{c: tc, br: br, readTimeout: d.ReadTimeout}, nil
 }
 
 // Bound each header line before allocation (bufio's default buffer is 4 KiB).
@@ -167,11 +176,12 @@ func readHeaderLine(br *bufio.Reader) (string, error) {
 
 // Conn — установленное соединение. Send можно звать одновременно с Recv.
 type Conn struct {
-	c    net.Conn
-	br   *bufio.Reader
-	wmu  sync.Mutex
-	frag []byte
-	once sync.Once
+	c           net.Conn
+	br          *bufio.Reader
+	wmu         sync.Mutex
+	frag        []byte
+	once        sync.Once
+	readTimeout time.Duration
 }
 
 func appendFrame(dst []byte, op byte, payload []byte) []byte {
@@ -216,6 +226,9 @@ func (c *Conn) Send(parts ...[]byte) error {
 // Recv возвращает следующее сообщение. io.EOF — сервер закрыл соединение.
 func (c *Conn) Recv() ([]byte, error) {
 	for {
+		if c.readTimeout > 0 {
+			_ = c.c.SetReadDeadline(time.Now().Add(c.readTimeout))
+		}
 		op, payload, fin, err := c.readFrame()
 		if err != nil {
 			return nil, err

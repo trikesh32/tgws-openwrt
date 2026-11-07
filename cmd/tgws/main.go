@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"tgws/internal/probe"
 	"tgws/internal/proxy"
 	"tgws/internal/sockmark"
+	"tgws/internal/worker"
 	"tgws/internal/ws"
 )
 
@@ -33,6 +35,8 @@ func main() {
 	statsPath := flag.String("stats", "", "файл со счётчиками в JSON (пусто — не писать)")
 	verbose := flag.Bool("v", false, "подробный журнал по каждому соединению")
 	showVersion := flag.Bool("version", false, "напечатать версию и выйти")
+	workerDomain := flag.String("worker-domain", "", "домен Cloudflare Worker; пусто — прежний путь Telegram WebSocket")
+	workerTokenFile := flag.String("worker-token-file", "", "файл с секретом Worker (секрет не передаётся в аргументах процесса)")
 	doProbe := flag.Bool("probe", false, "проверить путь через WebSocket до Telegram (JSON в stdout) и выйти; используется диагностикой в LuCI")
 	probeDC := flag.Int("dc", 2, "для -probe: номер дата-центра")
 	probeMedia := flag.Bool("media", false, "для -probe: media-соединение")
@@ -44,11 +48,40 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	domain, err := worker.Domain(*workerDomain)
+	if err != nil {
+		log.Fatal(err)
+	}
+	token, err := worker.ReadToken(*workerTokenFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if token != "" && domain == "" {
+		log.Fatal("worker-token-file requires worker-domain")
+	}
 
 	if *doProbe {
 		// Настоящий запрос к Telegram тем же путём, что и у демона. Код 0,
 		// если хотя бы один домен ответил: для работы достаточно одного.
-		res := probe.Run(context.Background(), *probeTarget, *probeDC, *probeMedia, 5*time.Second)
+		var res []probe.Result
+		if domain == "" {
+			res = probe.Run(context.Background(), *probeTarget, *probeDC, *probeMedia, 5*time.Second)
+		} else {
+			// Unlike Telegram's WebSocket gateway, Worker dials the actual DC.
+			target := "149.154.167.51"
+			flag.Visit(func(f *flag.Flag) {
+				if f.Name == "target" {
+					target = *probeTarget
+				}
+			})
+			ip, e := netip.ParseAddr(target)
+			if e != nil || !ip.Is4() {
+				log.Fatal("Worker probe target must be IPv4")
+			}
+			res = probe.RunWith(context.Background(), []string{domain}, func(string) ws.Dialer {
+				return worker.Dialer(domain, token, netip.AddrPortFrom(ip, 443), *mark)
+			}, *probeDC, *probeMedia, 5*time.Second)
+		}
 		b, err := probe.Marshal(res)
 		if err != nil {
 			log.Fatalf("tgws: %v", err)
@@ -121,6 +154,11 @@ func main() {
 		},
 		Logf:   logf,
 		Debugf: debugf,
+	}
+	if domain != "" {
+		cfg.DialWorker = func(ctx context.Context, dst netip.AddrPort) (proxy.WSConn, error) {
+			return worker.Dialer(domain, token, dst, *mark).Dial(ctx)
+		}
 	}
 	srv := proxy.New(cfg)
 

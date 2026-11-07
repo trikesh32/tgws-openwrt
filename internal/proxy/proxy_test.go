@@ -63,7 +63,7 @@ type harness struct {
 
 // newHarness поднимает прокси. wsSrv может быть nil (WebSocket недоступен),
 // dc — nil, если откат не ожидается.
-func newHarness(t *testing.T, dst netip.AddrPort, wsSrv *wstest.Server, dc *fakeDC) *harness {
+func newHarness(t *testing.T, dst netip.AddrPort, wsSrv *wstest.Server, dc *fakeDC, options ...func(*proxy.Config)) *harness {
 	t.Helper()
 	h := &harness{}
 	h.now.Store(1_000_000)
@@ -100,6 +100,9 @@ func newHarness(t *testing.T, dst netip.AddrPort, wsSrv *wstest.Server, dc *fake
 		},
 		Now:          func() time.Time { return time.Unix(h.now.Load(), 0) },
 		HelloTimeout: 300 * time.Millisecond,
+	}
+	for _, option := range options {
+		option(&cfg)
 	}
 	h.srv = proxy.New(cfg)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

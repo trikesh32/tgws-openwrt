@@ -34,6 +34,7 @@ type Config struct {
 	OrigDst        func(*net.TCPConn) (netip.AddrPort, error)
 	DialWS         func(ctx context.Context, target, domain, path string) (WSConn, error)
 	DialTCP        func(ctx context.Context, addr string) (net.Conn, error)
+	DialWorker     func(ctx context.Context, dst netip.AddrPort) (WSConn, error)
 	Stats          *Stats
 	Logf           func(format string, args ...any) // события, о которых стоит знать
 	Debugf         func(format string, args ...any) // ход каждого соединения
@@ -214,6 +215,21 @@ func (s *Server) handle(c net.Conn) {
 	default:
 		s.cfg.Debugf("[%s] unexpected destination port, dropping", label)
 		return
+	}
+	// Worker carries the original TCP stream, including unknown transports
+	// and DCs. Fall back only before any client bytes have been consumed.
+	if s.cfg.DialWorker != nil && !s.directWorkerBlocked(dst) {
+		conn, err := s.cfg.DialWorker(context.Background(), dst)
+		if err == nil {
+			s.fails.clear("worker:" + dst.String())
+			st.Worker.Add(1)
+			s.cfg.Debugf("[%s] via Cloudflare Worker", label)
+			s.bridgeWorker(c, conn)
+			return
+		}
+		st.WorkerErrors.Add(1)
+		s.fails.cooldown("worker:" + dst.String())
+		s.cfg.Debugf("[%s] Worker unavailable; trying Telegram WebSocket: %v", label, err)
 	}
 
 	_ = c.SetReadDeadline(time.Now().Add(s.cfg.HelloTimeout))

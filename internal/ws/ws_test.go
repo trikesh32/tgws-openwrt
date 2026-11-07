@@ -14,6 +14,39 @@ import (
 	"tgws/internal/ws/wstest"
 )
 
+func TestWorkerAuthHeaderAndNoRedirectFollowing(t *testing.T) {
+	seen := make(chan *http.Request, 1)
+	srv := wstest.NewHTTP(t, func(w http.ResponseWriter, r *http.Request) {
+		seen <- r
+		w.Header().Set("Location", "https://elsewhere.invalid/")
+		w.WriteHeader(302)
+	})
+	d := srv.Dialer("/apiws?dst=149.154.167.51&port=443")
+	d.BearerToken = strings.Repeat("a", 64)
+	_, err := d.Dial(context.Background())
+	var he *ws.HandshakeError
+	if !errors.As(err, &he) || he.Status != 302 {
+		t.Fatalf("redirect not rejected: %v", err)
+	}
+	r := <-seen
+	if r.Header.Get("Authorization") != "Bearer "+d.BearerToken {
+		t.Fatal("auth missing")
+	}
+	if strings.Contains(r.URL.String(), d.BearerToken) {
+		t.Fatal("token in URL")
+	}
+	if r.URL.Query().Get("dst") != "149.154.167.51" {
+		t.Fatal("destination lost")
+	}
+}
+
+func TestHeaderInjectionRejectedBeforeDial(t *testing.T) {
+	d := ws.Dialer{Addr: "must-not-dial.invalid:443", ServerName: "relay.example", Path: "/apiws", BearerToken: "x\r\nInjected: true"}
+	if _, err := d.Dial(context.Background()); err == nil || !strings.Contains(err.Error(), "invalid request field") {
+		t.Fatal(err)
+	}
+}
+
 func TestMissingAcceptIsRejected(t *testing.T) {
 	srv := wstest.NewHTTP(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Upgrade", "websocket")

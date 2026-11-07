@@ -13,6 +13,7 @@ const maxUnknown = 32
 // Stats — счётчики демона; читаются из LuCI через файл.
 type Stats struct {
 	Active, Total, WS, Fallback, WSErrors, BytesUp, BytesDown atomic.Int64
+	Worker, WorkerErrors                                      atomic.Int64
 
 	started time.Time
 	mu      sync.Mutex
@@ -43,16 +44,18 @@ func (s *Stats) NoteUnknown(ip string) bool {
 
 // Snapshot — сериализуемый снимок.
 type Snapshot struct {
-	Started   int64    `json:"started"`
-	Updated   int64    `json:"updated"`
-	Active    int64    `json:"active"`
-	Total     int64    `json:"total"`
-	WS        int64    `json:"ws"`
-	Fallback  int64    `json:"fallback"`
-	WSErrors  int64    `json:"ws_errors"`
-	BytesUp   int64    `json:"bytes_up"`
-	BytesDown int64    `json:"bytes_down"`
-	UnknownDC []string `json:"unknown_dc"`
+	Started      int64    `json:"started"`
+	Updated      int64    `json:"updated"`
+	Active       int64    `json:"active"`
+	Total        int64    `json:"total"`
+	WS           int64    `json:"ws"`
+	Worker       int64    `json:"worker"`
+	WorkerErrors int64    `json:"worker_errors"`
+	Fallback     int64    `json:"fallback"`
+	WSErrors     int64    `json:"ws_errors"`
+	BytesUp      int64    `json:"bytes_up"`
+	BytesDown    int64    `json:"bytes_down"`
+	UnknownDC    []string `json:"unknown_dc"`
 }
 
 func (s *Stats) Snapshot() Snapshot {
@@ -62,6 +65,7 @@ func (s *Stats) Snapshot() Snapshot {
 	return Snapshot{
 		Started: s.started.Unix(), Updated: time.Now().Unix(),
 		Active: s.Active.Load(), Total: s.Total.Load(), WS: s.WS.Load(),
+		Worker: s.Worker.Load(), WorkerErrors: s.WorkerErrors.Load(),
 		Fallback: s.Fallback.Load(), WSErrors: s.WSErrors.Load(),
 		BytesUp: s.BytesUp.Load(), BytesDown: s.BytesDown.Load(),
 		UnknownDC: unk,

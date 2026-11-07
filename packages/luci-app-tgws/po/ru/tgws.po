@@ -497,3 +497,30 @@ msgstr "работает"
 
 msgid "works, with remarks"
 msgstr "работает, есть замечания"
+
+msgid "Cloudflare Worker"
+msgstr "Cloudflare Worker"
+
+msgid "Worker domain"
+msgstr "Домен Worker"
+
+msgid "When set, Telegram TCP connections try this Worker first. If opening the Worker fails, the existing Telegram WebSocket route is used. Clear the domain to disable."
+msgstr "TCP-соединения Telegram сначала идут через этот Worker. Если подключение не удалось, используется прежний маршрут Telegram WebSocket. Очистите домен, чтобы отключить Worker."
+
+msgid "Enter a hostname without https://, path or port"
+msgstr "Введите домен без https://, пути и порта"
+
+msgid "Worker access token"
+msgstr "Секрет доступа к Worker"
+
+msgid "Use the same secret as TGWS_TOKEN in your Worker. Leave empty only for a Worker that does not require authentication. This is not a Cloudflare API token."
+msgstr "Укажите тот же секрет, что в TGWS_TOKEN вашего Worker. Оставляйте пустым только для Worker без авторизации. Это не API-токен Cloudflare."
+
+msgid "Use 32-256 letters, digits, underscores or dashes"
+msgstr "Используйте 32–256 латинских букв, цифр, символов подчёркивания или дефисов"
+
+msgid "Through Cloudflare Worker"
+msgstr "Через Cloudflare Worker"
+
+msgid "Worker connection errors"
+msgstr "Ошибки подключения к Worker"

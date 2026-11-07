@@ -19,6 +19,7 @@ return view.extend({
 		s.addremove = false;
 		s.tab('general', _('General'));
 		s.tab('websocket', _('WebSocket'));
+		s.tab('worker', _('Cloudflare Worker'));
 		s.tab('other', _('Other traffic'));
 		s.tab('subnets', _('Subnets'));
 
@@ -66,6 +67,25 @@ return view.extend({
 			if (value === '' || new RegExp('^' + pair + '(,[ ]*' + pair + ')*$').test(value))
 				return true;
 			return _('Expected pairs like 149.154.167.35:2, separated by commas');
+		};
+
+		o = s.taboption('worker', form.Value, 'worker_domain', _('Worker domain'),
+			_('When set, Telegram TCP connections try this Worker first. If opening the Worker fails, the existing Telegram WebSocket route is used. Clear the domain to disable.'));
+		o.placeholder = 'tgws-relay.example.workers.dev';
+		o.optional = true;
+		o.validate = function(section_id, value) {
+			if (value === '' || (value.length <= 253 &&
+			    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(value) &&
+			    !/^[0-9.]+$/.test(value))) return true;
+			return _('Enter a hostname without https://, path or port');
+		};
+		o = s.taboption('worker', form.Value, 'worker_token', _('Worker access token'),
+			_('Use the same secret as TGWS_TOKEN in your Worker. Leave empty only for a Worker that does not require authentication. This is not a Cloudflare API token.'));
+		o.password = true;
+		o.optional = true;
+		o.validate = function(section_id, value) {
+			return value === '' || /^[A-Za-z0-9_-]{32,256}$/.test(value)
+				? true : _('Use 32-256 letters, digits, underscores or dashes');
 		};
 
 		// --- Остальной трафик ------------------------------------------------
