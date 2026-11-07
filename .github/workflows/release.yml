@@ -148,9 +148,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Hash every release asset
+      # GitHub normalizes '~' in release asset names to '.'. Normalize before
+      # hashing so the installer's exact filename lookup matches the download.
+      - name: Normalize release filenames and hash every asset
         run: |
           cd dist
+          for file in *; do
+            normalized=$(printf '%s' "$file" | tr '~' '.')
+            [ "$file" != "$normalized" ] || continue
+            [ ! -e "$normalized" ] || { echo "::error::asset name collision: $normalized"; exit 1; }
+            mv "$file" "$normalized"
+          done
           sha256sum tgws-linux-* *.apk > SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
