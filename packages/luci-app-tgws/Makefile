@@ -9,9 +9,8 @@ PKG_MAINTAINER:=tgws-openwrt contributors
 
 LUCI_TITLE:=LuCI support for tgws, a transparent Telegram WebSocket proxy
 LUCI_DESCRIPTION:=Carries Telegram traffic of every device on the LAN over \
-	WebSocket without any setup on the devices. The tgws daemon itself is \
-	installed by install.sh.
-LUCI_DEPENDS:=+luci-base +firewall4 +ca-bundle +curl +procd-ujail
+	WebSocket without any setup on the devices. Depends on the tgws daemon package.
+LUCI_DEPENDS:=+tgws +luci-base +firewall4 +ca-bundle +curl +procd-ujail
 LUCI_URL:=https://github.com/trikesh32/tgws-openwrt
 LUCI_PKGARCH:=all
 

@@ -4,7 +4,6 @@
 set -e
 
 REPO="${TGWS_REPO:-trikesh32/tgws-openwrt}"
-BIN=/usr/bin/tgws
 VERSION="${TGWS_VERSION:-}"
 case "$REPO" in *[!A-Za-z0-9_./-]*|''|*..*) echo 'invalid TGWS_REPO' >&2; exit 1;; esac
 case "$VERSION" in v[0-9]*) ;; *) echo 'Set TGWS_VERSION to an explicit release tag, e.g. v0.1.2' >&2; exit 1;; esac
@@ -47,7 +46,7 @@ case "$DISTRIB_ARCH" in
 	mips_*)           suffix=mips ;;
 	*) die "unsupported architecture '$DISTRIB_ARCH'; supported: x86_64, aarch64, arm, mips, mipsel" ;;
 esac
-say "   $DISTRIB_ARCH -> tgws-linux-$suffix"
+say "   package architecture: $DISTRIB_ARCH (binary family: $suffix)"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -70,24 +69,16 @@ sums_url=$(pick_asset '\/SHA256SUMS')
 [ -n "$sums_url" ] || die "release has no SHA256SUMS; refusing unchecked installation"
 curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 -o "$tmp/SHA256SUMS" "$sums_url" || die "cannot download checksums"
 
-bin_url=$(pick_asset "\/tgws-linux-$suffix")
+core_url=$(pick_asset "\/tgws-[^\"\/]*-$DISTRIB_ARCH\\.apk")
 pkg_url=$(pick_asset '\/luci-app-tgws[^"\/]*\.apk')
 i18n_url=$(pick_asset '\/luci-i18n-tgws-ru[^"\/]*\.apk')
-[ -n "$bin_url" ] || die "no tgws-linux-$suffix in release $VERSION of $REPO"
+[ -n "$core_url" ] || die "no tgws .apk for $DISTRIB_ARCH in release $VERSION of $REPO"
 [ -n "$pkg_url" ] || die "no luci-app-tgws .apk in release $VERSION of $REPO"
 
-say "   $bin_url"
-curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$tmp/tgws" "$bin_url" || die "failed to download $bin_url"
-verify_asset "$tmp/tgws" "${bin_url##*/}"
+say "   $core_url"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$tmp/core.apk" "$core_url" || die "failed to download $core_url"
+verify_asset "$tmp/core.apk" "${core_url##*/}"
 
-# Места под бинарник должно хватать: запись в переполненный overlay обрывается
-# молча, и остаётся обрезанный файл. Нужны две копии (старая рядом с новой до
-# mv) и небольшой запас; размер известен только после скачивания.
-size_kb=$(( ($(wc -c < "$tmp/tgws") + 1023) / 1024 ))
-free_kb=$(df -k /usr 2>/dev/null | awk 'NR==2 { print $4 }')
-if [ -n "$free_kb" ] && [ "$free_kb" -lt $(( size_kb * 2 + 512 )) ]; then
-	die "not enough free space on /usr: ${free_kb} KB free, need about $(( size_kb * 2 + 512 )) KB"
-fi
 say "   $pkg_url"
 curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$tmp/pkg.apk" "$pkg_url" || die "failed to download $pkg_url"
 verify_asset "$tmp/pkg.apk" "${pkg_url##*/}"
@@ -97,34 +88,24 @@ if [ -n "$i18n_url" ]; then
 	verify_asset "$tmp/i18n.apk" "${i18n_url##*/}"
 fi
 
+# Resolve dependencies and check space/conflicts before interrupting Telegram.
+set -- "$tmp/core.apk" "$tmp/pkg.apk"
+[ ! -f "$tmp/i18n.apk" ] || set -- "$@" "$tmp/i18n.apk"
+apk add --simulate --allow-untrusted "$@"
+
+fresh=0
+[ -e /etc/config/tgws ] || fresh=1
 was_running=0
 if [ -x /etc/init.d/tgws ]; then
 	/etc/init.d/tgws running >/dev/null 2>&1 && was_running=1
 	say "== Stopping the running service"
-	/etc/init.d/tgws stop || true
+	/etc/init.d/tgws stop
 fi
 
-say "== Installing the daemon"
-# Бинарник кладётся ДО пакета: postinst пакета запускает службу, и при обратном
-# порядке стартовал бы старый демон, который потом так и работал бы до
-# перезагрузки. Запись через временное имя и mv: перезапись исполняемого файла
-# напрямую падает с "text file busy". install(1) не используется: в стандартной
-# сборке busybox на OpenWrt такого апплета нет.
-if ! { cp "$tmp/tgws" "$BIN.new" && chmod 0755 "$BIN.new" && mv -f "$BIN.new" "$BIN"; }; then
-	die "cannot write $BIN"
-fi
-[ -x "$BIN" ] || die "the daemon was not installed"
-
-# Первая установка определяется по конфигу ДО установки пакета: обновление не
-# должно включать службу, которую пользователь сознательно выключил.
-fresh=0
-[ -e /etc/config/tgws ] || fresh=1
-
-say "== Installing the package"
-apk add --allow-untrusted "$tmp/pkg.apk"
-if [ -f "$tmp/i18n.apk" ]; then
-	apk add --allow-untrusted "$tmp/i18n.apk" \
-		|| say "warning: the translation package failed to install; the interface will be English"
+say "== Installing daemon and LuCI packages"
+if ! apk add --allow-untrusted "$@"; then
+	[ "$was_running" != 1 ] || /etc/init.d/tgws start || true
+	die "package installation failed; inspect apk output before retrying"
 fi
 
 say "== Restarting LuCI backend"

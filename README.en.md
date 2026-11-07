@@ -1,3 +1,9 @@
+> Fork packaging: the daemon is now a separate `tgws` APK dependency of
+> `luci-app-tgws`. Ready APKs currently target `aarch64_cortex-a53` / OpenWrt 25.12.6.
+> The installer requires an APK matching the exact OpenWrt architecture; raw
+> cross-built binaries are not installed outside the package manager.
+> Manual Release workflow runs produce build artifacts without publishing a release.
+
 # tgws for OpenWrt
 
 > Security fork of [NooBiToo/tgws-openwrt](https://github.com/NooBiToo/tgws-openwrt),

@@ -12,13 +12,13 @@ F=install.sh
 assert_eq "0" "$(grep -cE '(^|[;&|(]|[[:space:]])install[[:space:]]+-' "$F")" \
 	"install.sh does not call install(1), which stock OpenWrt lacks"
 
-# Бинарник обязан лечь на место ДО apk add: postinst пакета запускает службу,
-# и при обратном порядке стартовал бы старый демон, который потом так и
-# остался бы работать до перезагрузки.
-bin_line=$(grep -n 'mv -f "\$BIN.new" "\$BIN"' "$F" | head -n1 | cut -d: -f1)
-apk_line=$(grep -n 'apk add --allow-untrusted "\$tmp/pkg.apk"' "$F" | head -n1 | cut -d: -f1)
-assert_eq "yes" "$([ -n "$bin_line" ] && [ -n "$apk_line" ] && [ "$bin_line" -lt "$apk_line" ] && echo yes || echo no)" \
-	"the daemon binary is replaced before the package is installed"
+# The daemon and UI belong to one apk transaction. No unmanaged binary copy.
+assert_eq "0" "$(grep -c 'BIN.new' "$F")" "no unmanaged daemon replacement"
+assert_contains "$(cat "$F")" 'set -- "$tmp/core.apk" "$tmp/pkg.apk"' "daemon and UI installed together"
+apk_line=$(grep -n '^if ! apk add --allow-untrusted' "$F" | cut -d: -f1)
+sim_line=$(grep -n '^apk add --simulate' "$F" | cut -d: -f1)
+stop_line=$(grep -n '^[[:space:]]*/etc/init.d/tgws stop' "$F" | cut -d: -f1)
+assert_eq "yes" "$([ "$sim_line" -lt "$stop_line" ] && [ "$stop_line" -lt "$apk_line" ] && echo yes || echo no)" "dependency dry run precedes service stop and installation"
 
 # После обновления служба перезапускается, а не стартует: у procd одинаковая
 # командная строка означает «уже запущено», и старый код продолжил бы работать.
@@ -46,16 +46,6 @@ assert_eq "arm" "$(suffix_for arm_cortex-a9)" "arm without fpu"
 assert_eq "arm" "$(suffix_for arm_arm1176jzf-s_vfp)" "armv6"
 assert_eq "DIE" "$(suffix_for mips64_octeonplus)" "mips64 is refused"
 assert_eq "DIE" "$(suffix_for riscv64_riscv64)" "riscv64 is refused"
-
-# Требуемое место считается от размера скачанного бинарника (нужны две копии:
-# старая и новая), а не берётся константой, втрое превышающей реальную нужду.
-assert_eq "0" "$(grep -c 'need_kb=[0-9]' "$F")" "free space is not a hard-coded constant"
-assert_contains "$(cat "$F")" 'wc -c < "$tmp/tgws"' "free space is derived from the downloaded binary"
-# Проверка идёт после скачивания: до него размер неизвестен.
-dl_line=$(grep -n 'curl .* -o "\$tmp/tgws"' "$F" | head -n1 | cut -d: -f1)
-sp_line=$(grep -n 'wc -c < "\$tmp/tgws"' "$F" | head -n1 | cut -d: -f1)
-assert_eq "yes" "$([ -n "$dl_line" ] && [ -n "$sp_line" ] && [ "$dl_line" -lt "$sp_line" ] && echo yes || echo no)" \
-	"the space check runs after the binary is downloaded"
 
 assert_eq "1" "$(grep -c '^build arm  *GOARCH=arm GOARM=5' scripts/build.sh)" "the arm build is soft-float GOARM=5"
 assert_eq "0" "$(cat scripts/build.sh install.sh | grep -c 'tgws-linux-armv7\|build armv7')" "no stale armv7 name"

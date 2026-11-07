@@ -10,7 +10,10 @@ permissions:
   contents: read
 
 env:
-  SDK_ARCH: x86-64-25.12.5
+  SDK_ARCH: mediatek-filogic-25.12.6
+  SDK_TARGET: mediatek/filogic
+  OPENWRT_VERSION: 25.12.6
+  PACKAGE_ARCH: aarch64_cortex-a53
 
 jobs:
   binaries:
@@ -23,23 +26,32 @@ jobs:
       - name: Tests
         run: go test ./...
       - name: Build
-        run: TGWS_VERSION="${GITHUB_REF_NAME#v}" sh scripts/build.sh dist
+        run: |
+          version=$(sed -n 's/^PKG_VERSION:=//p' packages/tgws/Makefile)
+          TGWS_VERSION="$version" sh scripts/build.sh dist
       - uses: actions/upload-artifact@v7
         with:
           name: binaries
           path: dist/*
 
   package:
+    needs: binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: binaries
+          path: dist
 
       # Версия пакета обязана совпадать с тегом: иначе в релизе лежит пакет с
       # чужим номером, и apk предложит «обновление» на ту же версию.
-      - name: Tag matches the package version
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Package versions match
         run: |
           pkg=$(sed -n 's/^PKG_VERSION:=//p' packages/luci-app-tgws/Makefile)
+          core=$(sed -n 's/^PKG_VERSION:=//p' packages/tgws/Makefile)
+          [ "$core" = "$pkg" ] || { echo "::error::daemon and LuCI versions differ"; exit 1; }
+          case "$GITHUB_REF" in refs/tags/*) ;; *) exit 0 ;; esac
           tag="${GITHUB_REF_NAME#v}"
           if [ "$pkg" != "$tag" ]; then
             echo "::error::tag is $tag, but PKG_VERSION is $pkg"
@@ -64,9 +76,9 @@ jobs:
         run: |
           mkdir -p ~/sdk-cache
           [ -s ~/sdk-cache/sdk.tar.zst ] && exit 0
-          base="https://downloads.openwrt.org/releases/${SDK_ARCH#x86-64-}/targets/x86/64"
+          base="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/$SDK_TARGET"
           curl -fsSL --retry 3 "$base/sha256sums" -o sums
-          line=$(grep -E ' \*openwrt-sdk-.*x86-64_.*\.tar\.zst$' sums)
+          line=$(grep -E ' \*openwrt-sdk-.*\.tar\.zst$' sums)
           [ -n "$line" ] || { echo "::error::no SDK archive in sha256sums"; exit 1; }
           file=${line#*\*}
           curl -fL --retry 3 -o ~/sdk-cache/sdk.tar.zst "$base/$file"
@@ -88,7 +100,7 @@ jobs:
         run: |
           sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
           docker run --rm \
-            --env FEEDNAME=tgws --env PACKAGES=luci-app-tgws \
+            --env FEEDNAME=tgws --env PACKAGES="tgws luci-app-tgws" \
             --entrypoint /entrypoint.sh \
             -v "$RUNNER_TEMP/entrypoint.sh:/entrypoint.sh:ro" \
             -v "$RUNNER_TEMP/setup.sh:/builder/setup.sh:ro" \
@@ -104,16 +116,18 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
+          find out/bin/ -name 'tgws-*.apk' -exec sh -c 'for f; do cp "$f" "dist/$(basename "$f" .apk)-$PACKAGE_ARCH.apk"; done' sh {} +
           find out/bin/ -name 'luci-app-tgws*.apk' -exec cp {} dist/ \;
           find out/bin/ -name 'luci-i18n-tgws-*.apk' -exec cp {} dist/ \;
           ls -la dist/
           ls dist/luci-app-tgws*.apk >/dev/null
           ls dist/luci-i18n-tgws-*.apk >/dev/null
+          ls dist/tgws-*-$PACKAGE_ARCH.apk >/dev/null
 
       - uses: actions/upload-artifact@v7
         with:
           name: package
-          path: dist/*
+          path: dist/*.apk
 
       - name: Upload build logs
         if: failure()
