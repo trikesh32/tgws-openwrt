@@ -29,7 +29,8 @@ jobs:
         run: sh scripts/build.sh dist
 
   scripts:
-    runs-on: ubuntu-latest
+    # The pinned 2025 ucode compiler requires the pre-C23 host toolchain.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
