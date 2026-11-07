@@ -80,7 +80,8 @@ func (s *Server) learn(ip netip.Addr, dc int) {
 func (s *Server) candidates(dst netip.AddrPort) []int {
 	var out []int
 	for dc := range s.cfg.Targets {
-		if s.fails.blocked(failKey(dc, false)) && !s.direct.blocked(dst.Addr().String()) {
+		key := failKey(dc, false)
+		if s.fails.blocked(key) && (s.fails.permanent(key) || s.direct.healthy(dst.String())) {
 			continue
 		}
 		out = append(out, dc)

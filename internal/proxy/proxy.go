@@ -130,6 +130,7 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 		key, _, err := net.SplitHostPort(c.RemoteAddr().String())
 		if err != nil || !s.admit(key) {
+			s.cfg.Stats.AdmissionDrops.Add(1)
 			c.Close()
 			continue
 		}
@@ -234,11 +235,7 @@ func (s *Server) handle(c net.Conn) {
 		// Первые байты нужны, чтобы понять, что за клиент пришёл: без них
 		// «не MTProto» не отличить от TLS, обфускации с secret или нового
 		// транспорта.
-		head := h.consumed
-		if len(head) > 24 {
-			head = head[:24]
-		}
-		s.fallback(c, h.consumed, dst, label, fmt.Sprintf("not MTProto (%v), first bytes % x", h.err, head))
+		s.fallback(c, h.consumed, dst, label, fmt.Sprintf("not MTProto (%v)", h.err))
 		return
 	}
 
@@ -256,9 +253,9 @@ func (s *Server) handle(c net.Conn) {
 			st.BytesUp.Add(int64(len(extra)))
 			s.cfg.Debugf("[%s] DC%d (discovered) via WebSocket", label, d.dc)
 			started := time.Now()
-			end := bridge(&timedConn{Conn: c, timeout: s.cfg.IOTimeout}, d.conn, h.pair, d.relay, d.sp, st, d.reply)
-			s.cfg.Debugf("[%s] DC%d session closed by %s (%v): up %d B, down %d B, %.1fs",
-				label, d.dc, end.by, end.err, end.up, end.down, time.Since(started).Seconds())
+			end := bridge(&timedConn{Conn: c, timeout: s.cfg.IOTimeout}, d.conn, h.pair, d.relay, d.sp, st, d.reply, h.proto)
+			s.cfg.Debugf("[%s] DC%d session closed by %s (%v): up %d B, down %d B, %.1fs, transport_error=%d",
+				label, d.dc, end.by, end.err, end.up, end.down, time.Since(started).Seconds(), end.transportCode)
 			return
 		}
 		h.consumed = append(append([]byte(nil), h.consumed...), extra...)
@@ -276,15 +273,15 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 	if s.fails.blocked(key) {
-		// Пауза отдаёт DC прямому пути, поэтому имеет смысл, только пока он
-		// работает. Там, где он заблокирован, пауза лишь ломала соединения:
+		// Временная пауза допустима только после ответа прямого IP:port.
+		// Отсутствие ошибки ещё не доказывает его доступность. Иначе
 		// загрузка видео открывает несколько параллельных соединений, и все
 		// они, пока длилась пауза, уходили в заведомо мёртвый путь.
-		if !s.direct.blocked(dst.Addr().String()) {
+		if s.fails.permanent(key) || s.direct.healthy(dst.String()) {
 			s.fallback(c, h.consumed, dst, label, fmt.Sprintf("DC%d WebSocket is paused", dc))
 			return
 		}
-		s.cfg.Debugf("[%s] DC%d is paused, but the direct path is down: trying WebSocket anyway", label, dc)
+		s.cfg.Debugf("[%s] DC%d cooldown ignored: no recently responsive direct path", label, dc)
 	}
 	conn := s.connectWS(dc, media, target, key, label)
 	if conn == nil {
@@ -305,11 +302,11 @@ func (s *Server) handle(c net.Conn) {
 	st.WS.Add(1)
 	s.cfg.Debugf("[%s] DC%d media=%v via WebSocket", label, dc, media)
 	started := time.Now()
-	end := bridge(&timedConn{Conn: c, timeout: s.cfg.IOTimeout}, conn, h.pair, relay, mtproto.NewSplitter(relayInit, h.proto, s.budget), st, nil)
+	end := bridge(&timedConn{Conn: c, timeout: s.cfg.IOTimeout}, conn, h.pair, relay, mtproto.NewSplitter(relayInit, h.proto, s.budget), st, nil, h.proto)
 	// Конец сессии нужен, чтобы отличить зависание от обрыва: без него в
 	// журнале видно только начало.
-	s.cfg.Debugf("[%s] DC%d session closed by %s (%v): up %d B, down %d B, %.1fs",
-		label, dc, end.by, end.err, end.up, end.down, time.Since(started).Seconds())
+	s.cfg.Debugf("[%s] DC%d session closed by %s (%v): up %d B, down %d B, %.1fs, transport_error=%d",
+		label, dc, end.by, end.err, end.up, end.down, time.Since(started).Seconds(), end.transportCode)
 }
 
 // connectWS перебирает домены DC. Решение об отказе принимает здесь же:
@@ -363,7 +360,7 @@ func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label
 	// соединении значит заставлять клиента ждать полный таймаут каждый раз:
 	// Android перебирает адреса по очереди, и подключение растягивалось на
 	// минуты. Клиент получает отказ сразу и идёт к следующему адресу.
-	key := dst.Addr().String()
+	key := dst.String()
 	if s.direct.blocked(key) {
 		s.cfg.Debugf("[%s] direct path failed recently, dropping at once", label)
 		return
@@ -386,7 +383,11 @@ func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label
 	wg.Add(2)
 	pipe := func(to, from net.Conn) {
 		defer wg.Done()
-		_, err := io.Copy(to, from)
+		var reader io.Reader = from
+		if from == up {
+			reader = &replyReader{Reader: from, notify: func() { s.direct.replied(key) }}
+		}
+		_, err := io.Copy(to, reader)
 		if err != nil {
 			_ = to.Close()
 			_ = from.Close()
@@ -408,7 +409,7 @@ func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label
 //
 // initial — первый ответ DC, уже прочитанный при определении DC перебором и
 // расшифрованный потоком Telegram; клиенту он уходит первым.
-func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitter, st *Stats, initial []byte) sessionEnd {
+func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitter, st *Stats, initial []byte, proto mtproto.Proto) sessionEnd {
 	defer sp.Close()
 	var up, down atomic.Int64
 	var first sync.Once
@@ -465,7 +466,9 @@ func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitt
 	go func() { // Telegram → клиент
 		defer wg.Done()
 		defer shutdown()
+		observer := transportObserver{proto: proto}
 		if len(initial) > 0 {
+			end.transportCode = observer.observe(initial, st)
 			client.Rev.XORKeyStream(initial, initial)
 			st.BytesDown.Add(int64(len(initial)))
 			down.Add(int64(len(initial)))
@@ -481,6 +484,9 @@ func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitt
 				return
 			}
 			relay.Rev.XORKeyStream(msg, msg)
+			if code := observer.observe(msg, st); code != 0 {
+				end.transportCode = code
+			}
 			client.Rev.XORKeyStream(msg, msg)
 			st.BytesDown.Add(int64(len(msg)))
 			down.Add(int64(len(msg)))
@@ -497,7 +503,8 @@ func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitt
 
 // sessionEnd описывает, как закончилась сессия через WebSocket.
 type sessionEnd struct {
-	by       string // кто завершил первым
-	err      error
-	up, down int64
+	by            string // кто завершил первым
+	err           error
+	up, down      int64
+	transportCode int32
 }

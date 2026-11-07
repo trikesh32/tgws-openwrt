@@ -12,8 +12,9 @@ const maxUnknown = 32
 
 // Stats — счётчики демона; читаются из LuCI через файл.
 type Stats struct {
-	Active, Total, WS, Fallback, WSErrors, BytesUp, BytesDown atomic.Int64
-	Worker, WorkerErrors                                      atomic.Int64
+	Active, Total, WS, Fallback, WSErrors, BytesUp, BytesDown   atomic.Int64
+	Worker, WorkerErrors                                        atomic.Int64
+	FirstReply404, FirstReply429, FirstReply444, AdmissionDrops atomic.Int64
 
 	started time.Time
 	mu      sync.Mutex
@@ -44,18 +45,22 @@ func (s *Stats) NoteUnknown(ip string) bool {
 
 // Snapshot — сериализуемый снимок.
 type Snapshot struct {
-	Started      int64    `json:"started"`
-	Updated      int64    `json:"updated"`
-	Active       int64    `json:"active"`
-	Total        int64    `json:"total"`
-	WS           int64    `json:"ws"`
-	Worker       int64    `json:"worker"`
-	WorkerErrors int64    `json:"worker_errors"`
-	Fallback     int64    `json:"fallback"`
-	WSErrors     int64    `json:"ws_errors"`
-	BytesUp      int64    `json:"bytes_up"`
-	BytesDown    int64    `json:"bytes_down"`
-	UnknownDC    []string `json:"unknown_dc"`
+	Started        int64    `json:"started"`
+	Updated        int64    `json:"updated"`
+	Active         int64    `json:"active"`
+	Total          int64    `json:"total"`
+	WS             int64    `json:"ws"`
+	Worker         int64    `json:"worker"`
+	WorkerErrors   int64    `json:"worker_errors"`
+	Fallback       int64    `json:"fallback"`
+	WSErrors       int64    `json:"ws_errors"`
+	BytesUp        int64    `json:"bytes_up"`
+	BytesDown      int64    `json:"bytes_down"`
+	UnknownDC      []string `json:"unknown_dc"`
+	FirstReply404  int64    `json:"first_reply_404"`
+	FirstReply429  int64    `json:"first_reply_429"`
+	FirstReply444  int64    `json:"first_reply_444"`
+	AdmissionDrops int64    `json:"admission_drops"`
 }
 
 func (s *Stats) Snapshot() Snapshot {
@@ -68,7 +73,9 @@ func (s *Stats) Snapshot() Snapshot {
 		Worker: s.Worker.Load(), WorkerErrors: s.WorkerErrors.Load(),
 		Fallback: s.Fallback.Load(), WSErrors: s.WSErrors.Load(),
 		BytesUp: s.BytesUp.Load(), BytesDown: s.BytesDown.Load(),
-		UnknownDC: unk,
+		UnknownDC:     unk,
+		FirstReply404: s.FirstReply404.Load(), FirstReply429: s.FirstReply429.Load(),
+		FirstReply444: s.FirstReply444.Load(), AdmissionDrops: s.AdmissionDrops.Load(),
 	}
 }
 

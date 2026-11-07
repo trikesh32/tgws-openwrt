@@ -17,10 +17,11 @@ type failTracker struct {
 	cool  time.Duration
 	until map[string]time.Time
 	black map[string]bool
+	good  map[string]time.Time
 }
 
 func newFailTracker(now func() time.Time, cool time.Duration) *failTracker {
-	return &failTracker{now: now, cool: cool, until: map[string]time.Time{}, black: map[string]bool{}}
+	return &failTracker{now: now, cool: cool, until: map[string]time.Time{}, black: map[string]bool{}, good: map[string]time.Time{}}
 }
 
 func (f *failTracker) blocked(key string) bool {
@@ -35,11 +36,34 @@ func (f *failTracker) blocked(key string) bool {
 
 func (f *failTracker) cooldown(key string) {
 	f.mu.Lock()
+	delete(f.good, key)
 	if len(f.until) >= 1024 {
 		clear(f.until)
 	}
 	f.until[key] = f.now().Add(f.cool)
 	f.mu.Unlock()
+}
+
+// Only a reply, not a TCP handshake, proves this IP:port can carry traffic.
+func (f *failTracker) replied(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.good) >= 1024 {
+		clear(f.good)
+	}
+	f.good[key] = f.now().Add(f.cool)
+}
+
+func (f *failTracker) healthy(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now().Before(f.good[key]) && !f.now().Before(f.until[key])
+}
+
+func (f *failTracker) permanent(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.black[key]
 }
 
 func (f *failTracker) blacklist(key string) {

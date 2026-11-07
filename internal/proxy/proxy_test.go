@@ -24,7 +24,7 @@ type fakeDC struct {
 	got chan []byte
 }
 
-func newFakeDC(t *testing.T, want int) *fakeDC {
+func newFakeDC(t *testing.T, want int, reply ...[]byte) *fakeDC {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -42,6 +42,9 @@ func newFakeDC(t *testing.T, want int) *fakeDC {
 				defer c.Close()
 				buf := make([]byte, want)
 				if _, err := io.ReadFull(c, buf); err == nil {
+					if len(reply) > 0 {
+						_, _ = c.Write(reply[0])
+					}
 					d.got <- buf
 				}
 				io.Copy(io.Discard, c)
@@ -273,13 +276,17 @@ func TestRedirectFallsBackVerbatimAndBlacklistsTheDC(t *testing.T) {
 	}
 }
 
-func TestTransientFailureCoolsDownThenRetries(t *testing.T) {
+func TestTransientFailureCoolsDownWithResponsiveFallbackThenRetries(t *testing.T) {
 	rawInit, _ := mtproto.NewRelayInit(mtproto.ProtoIntermediate, 2)
-	dc := newFakeDC(t, len(rawInit))
+	dc := newFakeDC(t, len(rawInit), []byte("reply"))
 	h := newHarness(t, netip.MustParseAddrPort("149.154.167.51:443"), nil, dc) // WS недоступен
 
-	h.dial(t).Write(rawInit)
+	c := h.dial(t)
+	c.Write(rawInit)
 	recvBytes(t, dc.got)
+	if _, err := io.ReadFull(c, make([]byte, 5)); err != nil {
+		t.Fatal(err)
+	}
 	first := h.dialWS.Load()
 	if first == 0 {
 		t.Fatal("the first client must try WebSocket")
@@ -297,6 +304,104 @@ func TestTransientFailureCoolsDownThenRetries(t *testing.T) {
 	if h.dialWS.Load() <= first {
 		t.Fatal("after the cooldown the DC must be tried again — a transient failure is not forever")
 	}
+}
+
+func TestSilentDirectHandshakeDoesNotSuppressWebSocket(t *testing.T) {
+	init, _ := mtproto.NewRelayInit(mtproto.ProtoIntermediate, 2)
+	dc := newFakeDC(t, len(init)) // Accepts TCP, never sends an application reply.
+	h := newHarness(t, netip.MustParseAddrPort("149.154.167.51:443"), nil, dc)
+	h.dial(t).Write(init)
+	recvBytes(t, dc.got)
+	first := h.dialWS.Load()
+	h.dial(t).Write(init)
+	recvBytes(t, dc.got)
+	if h.dialWS.Load() <= first {
+		t.Fatal("silent fallback incorrectly suppressed WS recovery")
+	}
+}
+
+func TestBridgeCountsFirstTransportErrorAndPreservesClientReply(t *testing.T) {
+	reply := []byte{4, 0, 0, 0, 0x6c, 0xfe, 0xff, 0xff}
+	w := wstest.New(t, func(p *wstest.Peer) {
+		b, err := p.ReadBinary()
+		if err != nil {
+			return
+		}
+		init, err := mtproto.ParseInit(b)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err = p.ReadBinary(); err != nil {
+			return
+		}
+		enc := append([]byte(nil), reply...)
+		init.Pair.Rev.XORKeyStream(enc, enc)
+		p.WriteFrame(2, true, enc[:3])
+		p.WriteFrame(2, true, enc[3:])
+		p.ReadBinary()
+	})
+	h := newHarness(t, netip.MustParseAddrPort("149.154.167.51:443"), w, nil)
+	c := h.dial(t)
+	c.Write(append([]byte{0xee, 0xee, 0xee, 0xee}, intermediatePacket([]byte("test"))...))
+	got := make([]byte, len(reply))
+	if _, err := io.ReadFull(c, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(reply) {
+		t.Fatal("transport error was changed")
+	}
+	if h.srv.Stats().Snapshot().FirstReply404 != 1 {
+		t.Fatal("transport error not counted")
+	}
+}
+
+func TestCooldownDoesNotSendNewAddressToUnprovenDirectPath(t *testing.T) {
+	seen := make(chan []byte, 1)
+	w := wstest.New(t, func(p *wstest.Peer) {
+		b, err := p.ReadBinary()
+		if err == nil {
+			seen <- b
+		}
+		p.ReadBinary()
+	})
+	var ready atomic.Bool
+	var clients atomic.Int32
+	pending := make(chan struct{}, 1)
+	release := make(chan struct{})
+	defer close(release)
+	h := newHarness(t, netip.AddrPort{}, nil, nil, func(cfg *proxy.Config) {
+		cfg.OrigDst = func(*net.TCPConn) (netip.AddrPort, error) {
+			if clients.Add(1) == 1 {
+				return netip.MustParseAddrPort("149.154.167.51:443"), nil
+			}
+			return netip.MustParseAddrPort("149.154.167.50:443"), nil
+		}
+		cfg.DialWS = func(ctx context.Context, _, _, _ string) (proxy.WSConn, error) {
+			if !ready.Load() {
+				return nil, errors.New("temporary outage")
+			}
+			return w.Dialer("/apiws").Dial(ctx)
+		}
+		cfg.DialTCP = func(context.Context, string) (net.Conn, error) {
+			select {
+			case pending <- struct{}{}:
+			default:
+			}
+			<-release
+			return nil, errors.New("blocked direct path")
+		}
+	})
+	init, _ := mtproto.NewRelayInit(mtproto.ProtoIntermediate, 2)
+	h.dial(t).Write(init)
+	select {
+	case <-pending:
+	case <-time.After(time.Second):
+		t.Fatal("first fallback not attempted")
+	}
+	ready.Store(true)
+	h.dial(t).Write(init)
+	recvBytes(t, seen)
 }
 
 // Прямой путь у многих пользователей заблокирован, и каждая попытка стоит

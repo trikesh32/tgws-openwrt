@@ -1,9 +1,24 @@
 package proxy
 
 import (
+	"io"
 	"net"
 	"time"
 )
+
+type replyReader struct {
+	io.Reader
+	notify func()
+}
+
+func (r *replyReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 && r.notify != nil {
+		r.notify()
+		r.notify = nil
+	}
+	return n, err
+}
 
 func (s *Server) admit(ip string) bool {
 	s.admissionMu.Lock()
