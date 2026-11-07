@@ -1,5 +1,9 @@
 # Detailed guide: tgws on OpenWrt
 
+> This guide describes the native Telegram WebSocket path. Fork additions:
+> [Worker routing](worker/README.ru.md), [tested zapret2 combination](RESULTS.ru.md).
+> Worker forwards the original TCP stream without using the DC mapping table.
+
 This guide covers everything about `luci-app-tgws`: what it does, how to install and configure it,
 how it works inside, how to check that it works and what to do when it does not.
 A short description is in the [README](README.en.md). The per-option reference is in
@@ -63,7 +67,7 @@ OpenWrt 24.10 and earlier versions with `opkg` are not supported.
 Run over SSH **on the router**:
 
 ```sh
-TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
+TGWS_VERSION=v0.1.5 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.5/install.sh)"
 ```
 
 The installer:
@@ -123,7 +127,7 @@ The first page shows whether the acceleration works and controls the service.
 
 ### Settings
 
-The options are split into four tabs; each has a hint and validates the value in place.
+The options are split into five tabs; each has a hint and validates the value in place.
 
 | Tab | Options |
 |---|---|
@@ -195,7 +199,7 @@ destination through `SO_ORIGINAL_DST`.
 
 **The table is loaded only after the daemon has started listening**, and removed **first** on stop.
 So there is never a moment when connections are redirected into a closed port. The daemon reports
-readiness through the counters file `/var/run/tgws.json`: it is written right after `bind` and removed
+readiness through the counters file `/var/run/tgws/stats.json`: it is written right after `bind` and removed
 on stop before the port is closed.
 
 `/etc/init.d/firewall start`, `reload` and `restart` **do not touch** the `inet tgws` table.
@@ -279,7 +283,7 @@ Timeouts: opening a WebSocket 4 seconds, a direct connection 5 seconds.
 | `/usr/libexec/tgws/update-subnets` | the subnet list update |
 | `/usr/libexec/tgws/subnets.sh` | the shared subnet list filter |
 | `/etc/tgws/subnets.txt` | the downloaded subnet list (if an update succeeded) |
-| `/var/run/tgws.json` | counters and the daemon's readiness marker |
+| `/var/run/tgws/stats.json` | counters and the daemon's readiness marker |
 | `/var/run/tgws.nft` | the generated rules |
 | `/etc/crontabs/root` | the weekly subnet list update entry |
 | `/usr/share/rpcd/ucode/luci.tgws` | the interface backend |
@@ -358,7 +362,7 @@ problem. From the console:
 ```sh
 logread -e tgws                  # the daemon's and the init script's log
 nft list table inet tgws         # are the interception rules loaded
-cat /var/run/tgws.json           # counters, addresses with no known data center
+cat /var/run/tgws/stats.json           # counters, addresses with no known data center
 /etc/init.d/tgws running && echo running
 ```
 
@@ -396,7 +400,7 @@ WebSocket" in diagnostics. You can set another target address if you know a work
 - **The provider may limit** frequent connections to `149.154.167.220`: the first connection sometimes
   fails while the next domain succeeds. The daemon accounts for this, but a delay is possible.
 - **Guest and other networks** must be added to "LAN interfaces", and their firewall zones must accept input.
-- Tested on Android and Windows Desktop. **iOS has not been tested.**
+- Upstream tested Android and Windows Desktop; this fork tested iPhone with Worker + zapret2: [report](RESULTS.ru.md).
 - This is a community integration, not an official Telegram product.
 
 ## Updating
@@ -404,7 +408,7 @@ WebSocket" in diagnostics. You can set another target address if you know a work
 Run the install again: it updates the package and the daemon and keeps your settings.
 
 ```sh
-TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
+TGWS_VERSION=v0.1.5 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.5/install.sh)"
 ```
 
 The Status page shows the installed and available versions. `/etc/config/tgws` is protected from

@@ -1,0 +1,23 @@
+{
+  "test": "isolated iPhone, Worker prefer with zapret2 TLS hostfakesplit",
+  "date": "2026-11-07",
+  "duration_seconds": 150,
+  "application_source_commit": "e6695ce3c969dabb6fdd0856eccd2e07daaa5954",
+  "user_observation": "Fast, no observed interruptions",
+  "counters": {
+    "total": 92,
+    "worker": 92,
+    "worker_errors": 0,
+    "ws": 0,
+    "ws_errors": 0,
+    "fallback": 0,
+    "bytes_up": 776321,
+    "bytes_down": 6986434,
+    "admission_drops": 0
+  },
+  "limitations": [
+    "Single device, short observation; not a throughput benchmark",
+    "worker_errors counts opening failures, not all transfer failures",
+    "Raw logs and network identifiers are intentionally omitted"
+  ]
+}

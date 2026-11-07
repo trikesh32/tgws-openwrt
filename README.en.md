@@ -1,16 +1,20 @@
-> Fork packaging: the daemon is now a separate `tgws` APK dependency of
-
-Cloudflare Worker transport (0.1.3+): [setup guide (Russian)](worker/README.ru.md), [Worker source](worker/worker.mjs). Configure a Worker domain and optional access token in LuCI; clear the domain to disable it.
-> `luci-app-tgws`. Ready APKs currently target `aarch64_cortex-a53` / OpenWrt 25.12.6.
-> The installer requires an APK matching the exact OpenWrt architecture; raw
-> cross-built binaries are not installed outside the package manager.
-> Manual Release workflow runs produce build artifacts without publishing a release.
-
 # tgws for OpenWrt
 
-> Security fork of [NooBiToo/tgws-openwrt](https://github.com/NooBiToo/tgws-openwrt),
-> based on `f64036d`. Version **0.1.2 is not released yet**; installation examples
-> require its tag and release assets. This revision has not been deployed to a router.
+Transparent Telegram proxy for the home network, with LuCI and an authenticated
+Cloudflare Worker transport. No proxy configuration is required on client devices.
+
+**[AX3000T field report: tgws + zapret2 + Worker (Russian)](RESULTS.ru.md)** —
+configuration, failed experiments, sanitized counters, and reproduction steps.
+iPhone voice messages, video messages and media worked in the final short test;
+Telegram calls remain unresolved. This is a single-network result, not a universal guarantee.
+
+[Install 0.1.5](#quick-start) · [Worker setup (Russian)](worker/README.ru.md) ·
+[Release packages](https://github.com/trikesh32/tgws-openwrt/releases/tag/v0.1.5)
+
+> Fork of [NooBiToo/tgws-openwrt](https://github.com/NooBiToo/tgws-openwrt), based on
+> `f64036d`. Version **0.1.5** includes security hardening, Worker routing and fallback fixes.
+> Ready APKs target `aarch64_cortex-a53` / OpenWrt 25.12.6; the installer requires
+> an exact package architecture match and verifies release SHA256SUMS.
 
 The fork rejects MTProto payloads above 2 MiB and malformed lengths, caps assembly
 buffer capacity at 16 MiB across connections, and admits at most 64 connections
@@ -40,7 +44,7 @@ The router intercepts the devices' connections to Telegram's data centers and ca
 `tg://proxy` links need to be set up on phones and computers.
 
 - **Transparent:** an `nftables` rule redirects traffic to a local daemon; clients know nothing.
-- **Does not break Telegram:** if the WebSocket is unavailable, the client's bytes are replayed verbatim over a direct connection.
+- **Fallback paths:** another route can be tried before data transfer begins; an active session cannot migrate between routes.
 - **Set up in the browser:** three LuCI pages — status, settings, diagnostics.
 - **Real diagnostics:** not "the port is open" but a real request to every data center, timed, with a hint on what to fix.
 - **Android and Desktop:** for Android, which does not name the data center in its connection, it is worked out automatically.
@@ -54,6 +58,11 @@ independent implementation in Go that works transparently on the router.
 ![tgws diagnostics in LuCI: checks with hints and a connection test with timings per address](Screenshot_2.png)
 
 ## How it works
+
+The diagram below shows the native Telegram WebSocket path. With a configured Worker,
+`fallback` tries Telegram WS → Worker → direct TCP; `prefer` tries Worker → Telegram WS
+→ direct TCP. Worker preserves the original TCP stream and destination. See the
+[field report](RESULTS.ru.md) for the tested zapret2 combination.
 
 ```
 a LAN device ─TCP→ a Telegram data center address
@@ -73,7 +82,7 @@ encrypted by its own protocol from the client to the server, and the router does
 
 - A router with **OpenWrt 25.12 or newer**, LuCI and the `apk` package manager.
 - SSH access and about 5 MB of free space for the binary.
-- A supported architecture: `x86_64`, `aarch64`, `arm`, `mips` or `mipsel`.
+- Ready APKs: `aarch64_cortex-a53`. Other architectures require an SDK package build; standalone cross-built binaries are not enough for the installer.
   Check it with `. /etc/openwrt_release; echo $DISTRIB_ARCH`.
 
 OpenWrt 24.10 and earlier versions with `opkg` are not supported.
@@ -83,7 +92,7 @@ OpenWrt 24.10 and earlier versions with `opkg` are not supported.
 Run over SSH **on the router**:
 
 ```sh
-TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
+TGWS_VERSION=v0.1.5 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.5/install.sh)"
 ```
 
 The installer checks compatibility and installs the dependencies, the daemon binary, the LuCI package and
@@ -112,7 +121,7 @@ Restart the Telegram app on the device: connections that are already open are no
 
 ![tgws status in LuCI: a running service, interception on, connection counters](Screenshot_1.png)
 
-**Settings:** four tabs with hints and value validation.
+**Settings:** five tabs with hints and value validation.
 
 ![tgws settings in LuCI: tabs, the switch, the port, LAN interfaces](Screenshot_3.png)
 
@@ -131,7 +140,7 @@ Restart the Telegram app on the device: connections that are already open are no
 - If Telegram is selected in TrustTunnel's lists, that traffic does not reach it: the interception comes first.
 - `/etc/init.d/firewall stop` removes all `nftables` tables, ours included; bring the interception back with
   `/etc/init.d/tgws restart`.
-- Tested on Android and Windows Desktop; **iOS has not been tested**.
+- Upstream tested Android and Windows Desktop. This fork additionally tested Windows chats and iPhone media: [field report](RESULTS.ru.md).
 
 The full list of particulars is in the [limitations](GUIDE.en.md#limitations).
 
@@ -155,7 +164,7 @@ Found a bug or tried the package on your router (especially on iOS)? [Open an is
 with the model, the OpenWrt version, the package version and the diagnostics result.
 Remove anything private from logs before posting them.
 
-The package is free. You can support development with a donation at the [addresses in the TrustTunnelOpenWrt guide](https://github.com/NooBiToo/TrustTunnelOpenWrt/blob/main/GUIDE.en.md#donate): both projects have the same developer.
+The package is free. The [upstream donation guide](https://github.com/NooBiToo/TrustTunnelOpenWrt/blob/main/GUIDE.en.md#donate) supports the original author; this fork is maintained separately.
 
 ## License and credits
 
