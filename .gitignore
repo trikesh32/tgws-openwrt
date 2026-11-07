@@ -1,5 +1,8 @@
 /dist/
 /out/
+.wrangler/
+.dev.vars
+.dev.vars.*
 *.apk
 .claude/
 .superpowers/
