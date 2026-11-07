@@ -11,4 +11,4 @@ fi
 root=$(pwd -W 2>/dev/null || pwd)
 # Без этого Git Bash переписывает пути внутри аргументов docker.
 export MSYS_NO_PATHCONV=1
-exec docker run --rm -v "$root:/src" -w /src golang:1.23 go test "$@"
+exec docker run --rm -v "$root:/src" -w /src golang:1.27.1 go test "$@"

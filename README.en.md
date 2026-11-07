@@ -1,6 +1,28 @@
 # tgws for OpenWrt
 
-[Русский](README.md) · [Releases](https://github.com/NooBiToo/tgws-openwrt/releases) · [Detailed guide](GUIDE.en.md) · [Report a bug](https://github.com/NooBiToo/tgws-openwrt/issues)
+> Security fork of [NooBiToo/tgws-openwrt](https://github.com/NooBiToo/tgws-openwrt),
+> based on `f64036d`. Version **0.1.2 is not released yet**; installation examples
+> require its tag and release assets. This revision has not been deployed to a router.
+
+The fork rejects MTProto payloads above 2 MiB and malformed lengths, caps assembly
+buffer capacity at 16 MiB across connections, and admits at most 64 connections
+(16 per source IP). Stalled client/direct I/O expires after 5 minutes, WebSocket
+writes after 30 seconds. These are router policies, not Telegram protocol maxima.
+The service requires `procd-ujail`, runs as `tgws:tgws` with `no_new_privs` and only
+`CAP_NET_RAW` (SO_MARK on Linux 5.17+), and refuses an unsandboxed fallback. Use a
+listening port >=1024. Its statistics directory is the only explicit writable mount.
+`GOMEMLIMIT=64MiB` is a soft GC target, not a hard RSS cap; TLS, WebSocket and kernel
+socket memory are outside the 16 MiB assembly budget.
+
+The installer requires an explicit `TGWS_VERSION` and verifies every downloaded
+asset against release SHA256SUMS before replacing the daemon. Hashes from the same
+GitHub release provide integrity, not an independent publisher signature. Local
+APK installation still uses `--allow-untrusted` after verification. Account compromise
+is outside this protection. WebSocket upgrades require a valid accept header and
+bounded response header lines. See the Russian README for detailed changes and tests.
+
+
+[Русский](README.md) · [Releases](https://github.com/trikesh32/tgws-openwrt/releases) · [Detailed guide](GUIDE.en.md) · [Report a bug](https://github.com/trikesh32/tgws-openwrt/issues)
 
 **Telegram on every device of the home network goes over WebSocket — with nothing to set up on the devices. Control and diagnostics in LuCI.**
 
@@ -53,7 +75,7 @@ OpenWrt 24.10 and earlier versions with `opkg` are not supported.
 Run over SSH **on the router**:
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/NooBiToo/tgws-openwrt/main/install.sh)"
+TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
 ```
 
 The installer checks compatibility and installs the dependencies, the daemon binary, the LuCI package and
@@ -118,10 +140,10 @@ To update, run the install command again: it updates the package and the daemon 
 
 ## Support the project
 
-**If the package is useful, give it a ⭐ [on GitHub](https://github.com/NooBiToo/tgws-openwrt).**
+**If the package is useful, give it a ⭐ [on GitHub](https://github.com/trikesh32/tgws-openwrt).**
 It helps other users find the project.
 
-Found a bug or tried the package on your router (especially on iOS)? [Open an issue](https://github.com/NooBiToo/tgws-openwrt/issues)
+Found a bug or tried the package on your router (especially on iOS)? [Open an issue](https://github.com/trikesh32/tgws-openwrt/issues)
 with the model, the OpenWrt version, the package version and the diagnostics result.
 Remove anything private from logs before posting them.
 

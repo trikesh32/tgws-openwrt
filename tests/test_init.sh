@@ -37,7 +37,8 @@ BIN="$bin/tgws"
 NFT="$bin/nft"
 RUN="$run"
 LIBDIR="$GEN_DIR"
-STATS="$run/tgws.json"
+STATS="$run/tgws/stats.json"
+mkdir -p "$run/tgws"
 RULESET="$run/tgws.nft"
 
 # Заглушки библиотек OpenWrt. Значения UCI задаются переменными U_*.
@@ -53,6 +54,16 @@ config_get() {
 		*) eval "$1=\"$4\"" ;;
 	esac
 }
+# Account and ownership operations belong to OpenWrt, not the test host.
+group_add_next() { echo 32768; }
+user_exists() { return 0; }
+id() { echo 32768; }
+chown() { :; }
+JAIL="$bin/tgws"
+CAPS="packages/luci-app-tgws/root/etc/capabilities/tgws.json"
+procd_add_jail() { echo "jail $*" >> "$CALLS"; }
+procd_add_jail_mount() { echo "mount-ro $*" >> "$CALLS"; }
+procd_add_jail_mount_rw() { echo "mount-rw $*" >> "$CALLS"; }
 procd_open_instance() { echo "procd_open_instance $*" >> "$CALLS"; }
 procd_set_param() { echo "procd_set_param $*" >> "$CALLS"; }
 procd_close_instance() { echo "procd_close_instance" >> "$CALLS"; }
@@ -106,6 +117,9 @@ assert_contains "$(calls)" "procd_open_instance tgws" "enabled: opens the instan
 assert_contains "$(calls)" "-listen :5454" "enabled: default port"
 assert_contains "$(calls)" "-dc-ip 2:149.154.167.220,4:149.154.167.220" "enabled: default DC targets"
 assert_contains "$(calls)" "-mark 0x7467" "enabled: socket mark"
+assert_contains "$(calls)" "procd_set_param user tgws" "runs as dedicated user"
+assert_contains "$(calls)" "procd_set_param no_new_privs 1" "no privilege escalation"
+assert_contains "$(calls)" "jail tgws log requirejail" "jail required"
 assert_contains "$(calls)" "-stats $STATS" "enabled: stats file"
 assert_eq "0" "$(calls | grep -c '^nft ')" "enabled: nft is NOT loaded before the daemon listens"
 assert_eq "0" "$(calls | grep -c 'fallback-mark')" "enabled: no fallback mark unless configured"
@@ -317,4 +331,10 @@ reset
 service_triggers
 assert_contains "$(calls)" "procd_add_reload_trigger tgws" "reload on config change"
 
+reset
+U_ENABLED=1
+JAIL="$sandbox/missing"
+start_service; rc=$?
+assert_eq "1" "$rc" "missing jail refuses startup"
+assert_eq "0" "$(calls | grep -c procd_open_instance)" "never falls back to root"
 tt_test_summary

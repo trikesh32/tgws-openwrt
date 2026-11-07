@@ -29,17 +29,20 @@ type WSConn interface {
 
 // Config собирает зависимости; всё внешнее (сеть, адреса, часы) подменяемо.
 type Config struct {
-	Targets      map[int]string     // DC → IP для WebSocket
-	ExtraDC      map[netip.Addr]int // ручная привязка адресов к DC поверх зашитой таблицы
-	OrigDst      func(*net.TCPConn) (netip.AddrPort, error)
-	DialWS       func(ctx context.Context, target, domain, path string) (WSConn, error)
-	DialTCP      func(ctx context.Context, addr string) (net.Conn, error)
-	Stats        *Stats
-	Logf         func(format string, args ...any) // события, о которых стоит знать
-	Debugf       func(format string, args ...any) // ход каждого соединения
-	Now          func() time.Time
-	HelloTimeout time.Duration
-	Cooldown     time.Duration
+	Targets        map[int]string     // DC → IP для WebSocket
+	ExtraDC        map[netip.Addr]int // ручная привязка адресов к DC поверх зашитой таблицы
+	OrigDst        func(*net.TCPConn) (netip.AddrPort, error)
+	DialWS         func(ctx context.Context, target, domain, path string) (WSConn, error)
+	DialTCP        func(ctx context.Context, addr string) (net.Conn, error)
+	Stats          *Stats
+	Logf           func(format string, args ...any) // события, о которых стоит знать
+	Debugf         func(format string, args ...any) // ход каждого соединения
+	Now            func() time.Time
+	HelloTimeout   time.Duration
+	Cooldown       time.Duration
+	MaxConnections int
+	MaxPerIP       int
+	IOTimeout      time.Duration
 	// DiscoverWait — сколько ждать первый пакет клиента при определении DC
 	// перебором; ReplyWait — сколько ждать ответ DC-кандидата.
 	DiscoverWait time.Duration
@@ -48,8 +51,12 @@ type Config struct {
 
 // Server обслуживает перехваченные соединения.
 type Server struct {
-	cfg   Config
-	fails *failTracker
+	cfg         Config
+	slots       chan struct{}
+	admissionMu sync.Mutex
+	perIP       map[string]int
+	budget      *mtproto.Budget
+	fails       *failTracker
 	// direct помнит адреса, до которых прямая попытка только что не дошла.
 	direct *failTracker
 	// learned — адреса, чей DC определён перебором (см. discover.go).
@@ -59,6 +66,15 @@ type Server struct {
 
 // New подставляет значения по умолчанию.
 func New(cfg Config) *Server {
+	if cfg.MaxConnections <= 0 {
+		cfg.MaxConnections = 64
+	}
+	if cfg.MaxPerIP <= 0 {
+		cfg.MaxPerIP = 16
+	}
+	if cfg.IOTimeout <= 0 {
+		cfg.IOTimeout = 5 * time.Minute
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -85,6 +101,9 @@ func New(cfg Config) *Server {
 	}
 	return &Server{
 		cfg:     cfg,
+		slots:   make(chan struct{}, cfg.MaxConnections),
+		perIP:   map[string]int{},
+		budget:  mtproto.NewBudget(16 << 20),
 		fails:   newFailTracker(cfg.Now, cfg.Cooldown),
 		direct:  newFailTracker(cfg.Now, cfg.Cooldown),
 		learned: map[netip.Addr]int{},
@@ -107,7 +126,12 @@ func (s *Server) Serve(l net.Listener) error {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		go s.handle(c)
+		key, _, err := net.SplitHostPort(c.RemoteAddr().String())
+		if err != nil || !s.admit(key) {
+			c.Close()
+			continue
+		}
+		go func() { defer s.release(key); s.handle(c) }()
 	}
 }
 
@@ -215,13 +239,17 @@ func (s *Server) handle(c net.Conn) {
 	if !ok {
 		// DC неизвестен: пробуем определить перебором по ответам DC. Всё, что
 		// клиент успел прислать сверх приветствия, нужно сохранить для отката.
-		d, extra := s.discover(c, h, dst, label)
+		d, extra, discoveryErr := s.discover(c, h, dst, label)
+		if discoveryErr != nil {
+			s.cfg.Debugf("[%s] rejected: %v", label, discoveryErr)
+			return
+		}
 		if d != nil {
 			st.WS.Add(1)
 			st.BytesUp.Add(int64(len(extra)))
 			s.cfg.Debugf("[%s] DC%d (discovered) via WebSocket", label, d.dc)
 			started := time.Now()
-			end := bridge(c, d.conn, h.pair, d.relay, d.sp, st, d.reply)
+			end := bridge(&timedConn{Conn: c, timeout: s.cfg.IOTimeout}, d.conn, h.pair, d.relay, d.sp, st, d.reply)
 			s.cfg.Debugf("[%s] DC%d session closed by %s (%v): up %d B, down %d B, %.1fs",
 				label, d.dc, end.by, end.err, end.up, end.down, time.Since(started).Seconds())
 			return
@@ -270,7 +298,7 @@ func (s *Server) handle(c net.Conn) {
 	st.WS.Add(1)
 	s.cfg.Debugf("[%s] DC%d media=%v via WebSocket", label, dc, media)
 	started := time.Now()
-	end := bridge(c, conn, h.pair, relay, mtproto.NewSplitter(relayInit, h.proto), st, nil)
+	end := bridge(&timedConn{Conn: c, timeout: s.cfg.IOTimeout}, conn, h.pair, relay, mtproto.NewSplitter(relayInit, h.proto, s.budget), st, nil)
 	// Конец сессии нужен, чтобы отличить зависание от обрыва: без него в
 	// журнале видно только начало.
 	s.cfg.Debugf("[%s] DC%d session closed by %s (%v): up %d B, down %d B, %.1fs",
@@ -317,6 +345,7 @@ func (s *Server) connectWS(dc int, media bool, target, key, label string) WSConn
 // fallback ведёт соединение прямым TCP на исходный адрес. Прочитанные у
 // клиента байты повторяются дословно, поэтому перешифровка не нужна.
 func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label, why string) {
+	c = &timedConn{Conn: c, timeout: s.cfg.IOTimeout}
 	s.cfg.Stats.Fallback.Add(1)
 	s.cfg.Debugf("[%s] direct: %s", label, why)
 
@@ -337,6 +366,7 @@ func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label
 	}
 	s.direct.clear(key)
 	defer up.Close()
+	up = &timedConn{Conn: up, timeout: s.cfg.IOTimeout}
 	if len(consumed) > 0 {
 		if _, err := up.Write(consumed); err != nil {
 			return
@@ -346,7 +376,14 @@ func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label
 	wg.Add(2)
 	pipe := func(to, from net.Conn) {
 		defer wg.Done()
-		_, _ = io.Copy(to, from)
+		_, err := io.Copy(to, from)
+		if err != nil {
+			_ = to.Close()
+			_ = from.Close()
+			return
+		}
+		// Preserve TCP half-close so the other direction can finish its
+		// response. Its I/O deadline still bounds peers that never close.
 		if cw, ok := to.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
@@ -362,6 +399,7 @@ func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label
 // initial — первый ответ DC, уже прочитанный при определении DC перебором и
 // расшифрованный потоком Telegram; клиенту он уходит первым.
 func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitter, st *Stats, initial []byte) sessionEnd {
+	defer sp.Close()
 	var up, down atomic.Int64
 	var first sync.Once
 	var end sessionEnd
@@ -394,7 +432,12 @@ func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitt
 				relay.Fwd.XORKeyStream(b, b)
 				st.BytesUp.Add(int64(n))
 				up.Add(int64(n))
-				if parts := sp.Split(b); len(parts) > 0 {
+				parts, splitErr := sp.Split(b)
+				if splitErr != nil {
+					finish("invalid client packet", splitErr)
+					return
+				}
+				if len(parts) > 0 {
 					if serr := w.Send(parts...); serr != nil {
 						finish("upstream write", serr)
 						return
@@ -403,9 +446,7 @@ func bridge(c net.Conn, w WSConn, client, relay mtproto.Pair, sp *mtproto.Splitt
 			}
 			if err != nil {
 				finish("client", err)
-				if tail := sp.Flush(); len(tail) > 0 {
-					_ = w.Send(tail)
-				}
+				// Incomplete packets are discarded on disconnect.
 				return
 			}
 		}

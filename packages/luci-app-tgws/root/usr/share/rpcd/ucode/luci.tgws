@@ -4,11 +4,11 @@ import { popen, readfile, writefile, access, stat, mkdir } from 'fs';
 
 const BIN = '/usr/bin/tgws';
 const LIBDIR = '/usr/libexec/tgws';
-const STATS = '/var/run/tgws.json';
+const STATS = '/var/run/tgws/stats.json';
 const SUBNETS_FILE = '/etc/tgws/subnets.txt';
 const CACHE_DIR = '/var/cache/tgws';
 const VERSION_CACHE = CACHE_DIR + '/release.json';
-const RELEASE_URL = 'https://api.github.com/repos/NooBiToo/tgws-openwrt/releases/latest';
+const RELEASE_URL = 'https://api.github.com/repos/trikesh32/tgws-openwrt/releases/latest';
 // Шесть часов: четыре запроса в сутки — исчезающая доля от 60 неавторизованных
 // запросов в час, которыми GitHub ограничивает один адрес.
 const RELEASE_TTL = 21600;

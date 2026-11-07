@@ -35,6 +35,9 @@ func (f *failTracker) blocked(key string) bool {
 
 func (f *failTracker) cooldown(key string) {
 	f.mu.Lock()
+	if len(f.until) >= 1024 {
+		clear(f.until)
+	}
 	f.until[key] = f.now().Add(f.cool)
 	f.mu.Unlock()
 }

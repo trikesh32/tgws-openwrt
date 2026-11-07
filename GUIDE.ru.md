@@ -62,7 +62,7 @@ OpenWrt 24.10 и более ранние версии с `opkg` не подде�
 Выполните по SSH **на роутере**:
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/NooBiToo/tgws-openwrt/main/install.sh)"
+TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
 ```
 
 Установщик:
@@ -407,7 +407,7 @@ WebSocket». Можно задать другой адрес целей, есл�
 Повторно запустите установку: она обновит пакет и демон, сохранив настройки.
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/NooBiToo/tgws-openwrt/main/install.sh)"
+TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
 ```
 
 Страница «Состояние» показывает установленную и доступную версии. Файл `/etc/config/tgws`

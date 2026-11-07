@@ -39,7 +39,7 @@ func TestSplitsTwoAbridgedPackets(t *testing.T) {
 	p1, p2 := abridged(2), abridged(3)
 	wire := enc(append(append([]byte(nil), p1...), p2...))
 
-	parts := sp.Split(wire)
+	parts := mustSplit(t, sp, wire)
 	if len(parts) != 2 {
 		t.Fatalf("got %d parts, want 2", len(parts))
 	}
@@ -52,10 +52,10 @@ func TestHoldsPartialPacketUntilComplete(t *testing.T) {
 	sp, enc := newSplitter(t, ProtoIntermediate)
 	wire := enc(intermediate(20))
 
-	if parts := sp.Split(wire[:10]); len(parts) != 0 {
+	if parts := mustSplit(t, sp, wire[:10]); len(parts) != 0 {
 		t.Fatalf("partial packet leaked: %d parts", len(parts))
 	}
-	parts := sp.Split(wire[10:])
+	parts := mustSplit(t, sp, wire[10:])
 	if len(parts) != 1 || !bytes.Equal(parts[0], wire) {
 		t.Fatalf("complete packet not released intact: %d parts", len(parts))
 	}
@@ -68,30 +68,35 @@ func TestExtendedAbridgedLength(t *testing.T) {
 	p[0] = 0x7f
 	p[1], p[2], p[3] = byte(words), byte(words>>8), byte(words>>16)
 	wire := enc(p)
-	parts := sp.Split(wire)
+	parts := mustSplit(t, sp, wire)
 	if len(parts) != 1 || !bytes.Equal(parts[0], wire) {
 		t.Fatalf("extended-length packet: %d parts", len(parts))
 	}
 }
 
-func TestDisablesItselfOnZeroLength(t *testing.T) {
+func TestRejectsZeroLength(t *testing.T) {
 	sp, enc := newSplitter(t, ProtoAbridged)
-	wire := enc([]byte{0x00, 1, 2, 3})
-	parts := sp.Split(wire)
-	if len(parts) != 1 || !bytes.Equal(parts[0], wire) {
-		t.Fatal("unreadable length must pass the chunk through whole")
+	if _, err := sp.Split(enc([]byte{0, 1, 2, 3})); err != ErrPacketSize {
+		t.Fatalf("got %v", err)
 	}
-	next := enc([]byte{9, 9, 9})
-	parts = sp.Split(next)
-	if len(parts) != 1 || !bytes.Equal(parts[0], next) {
-		t.Fatal("a disabled splitter must pass later chunks through")
+	if _, err := sp.Split(enc([]byte{9, 9})); err != ErrPacketSize {
+		t.Fatal("failure must be terminal")
 	}
+}
+
+func mustSplit(t *testing.T, sp *Splitter, b []byte) [][]byte {
+	t.Helper()
+	parts, err := sp.Split(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parts
 }
 
 func TestFlushReturnsTail(t *testing.T) {
 	sp, enc := newSplitter(t, ProtoIntermediate)
 	wire := enc(intermediate(20))
-	sp.Split(wire[:7])
+	mustSplit(t, sp, wire[:7])
 	tail := sp.Flush()
 	if !bytes.Equal(tail, wire[:7]) {
 		t.Fatalf("flush = % x, want % x", tail, wire[:7])

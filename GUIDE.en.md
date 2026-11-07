@@ -63,7 +63,7 @@ OpenWrt 24.10 and earlier versions with `opkg` are not supported.
 Run over SSH **on the router**:
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/NooBiToo/tgws-openwrt/main/install.sh)"
+TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
 ```
 
 The installer:
@@ -404,7 +404,7 @@ WebSocket" in diagnostics. You can set another target address if you know a work
 Run the install again: it updates the package and the daemon and keeps your settings.
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/NooBiToo/tgws-openwrt/main/install.sh)"
+TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
 ```
 
 The Status page shows the installed and available versions. `/etc/config/tgws` is protected from

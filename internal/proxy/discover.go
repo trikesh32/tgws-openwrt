@@ -68,6 +68,9 @@ func (s *Server) learnedDC(ip netip.Addr) (int, bool) {
 
 func (s *Server) learn(ip netip.Addr, dc int) {
 	s.learnedMu.Lock()
+	if len(s.learned) >= 1024 {
+		clear(s.learned)
+	}
 	s.learned[ip] = dc
 	s.learnedMu.Unlock()
 }
@@ -110,10 +113,10 @@ func (s *Server) firstReply(conn WSConn) ([]byte, bool) {
 // discover пытается определить DC соединения, чей DC неизвестен. Вторым
 // значением всегда возвращает байты, которые прочитал у клиента сверх
 // приветствия: при неудаче они нужны для дословного повтора на прямом пути.
-func (s *Server) discover(c net.Conn, h hello, dst netip.AddrPort, label string) (*discovery, []byte) {
+func (s *Server) discover(c net.Conn, h hello, dst netip.AddrPort, label string) (*discovery, []byte, error) {
 	cands := s.candidates(dst)
 	if len(cands) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Без первого пакета клиента нечем проверять DC.
@@ -123,7 +126,7 @@ func (s *Server) discover(c net.Conn, h hello, dst netip.AddrPort, label string)
 	_ = c.SetReadDeadline(time.Time{})
 	raw := append([]byte(nil), buf[:n]...)
 	if n == 0 {
-		return nil, raw
+		return nil, raw, nil
 	}
 	plain := append([]byte(nil), raw...)
 	h.pair.Fwd.XORKeyStream(plain, plain)
@@ -134,35 +137,44 @@ func (s *Server) discover(c net.Conn, h hello, dst netip.AddrPort, label string)
 			continue
 		}
 		relayInit, relay := mtproto.NewRelayInit(h.proto, int16(dc))
-		sp := mtproto.NewSplitter(relayInit, h.proto)
+		sp := mtproto.NewSplitter(relayInit, h.proto, s.budget)
 		enc := append([]byte(nil), plain...)
 		relay.Fwd.XORKeyStream(enc, enc)
-		parts := sp.Split(enc)
+		parts, splitErr := sp.Split(enc)
+		if splitErr != nil {
+			sp.Close()
+			_ = conn.Close()
+			return nil, nil, splitErr
+		}
 		if len(parts) == 0 {
 			// Первый пакет пришёл не целиком: DC ничего не ответит, и
 			// проверить им нечем.
+			sp.Close()
 			_ = conn.Close()
-			return nil, raw
+			return nil, raw, nil
 		}
 		if conn.Send(relayInit) != nil || conn.Send(parts...) != nil {
+			sp.Close()
 			_ = conn.Close()
 			continue
 		}
 		reply, ok := s.firstReply(conn)
 		if !ok {
 			s.cfg.Debugf("[%s] DC%d gave no answer to the first packet", label, dc)
+			sp.Close()
 			_ = conn.Close()
 			continue
 		}
 		relay.Rev.XORKeyStream(reply, reply)
 		if isWrongDCError(h.proto, reply) {
 			s.cfg.Debugf("[%s] DC%d rejected the client (wrong DC), trying the next", label, dc)
+			sp.Close()
 			_ = conn.Close()
 			continue
 		}
 		s.learn(dst.Addr(), dc)
 		s.cfg.Logf("learned: %s belongs to DC%d", dst.Addr(), dc)
-		return &discovery{dc: dc, conn: conn, relay: relay, sp: sp, reply: reply}, raw
+		return &discovery{dc: dc, conn: conn, relay: relay, sp: sp, reply: reply}, raw, nil
 	}
-	return nil, raw
+	return nil, raw, nil
 }

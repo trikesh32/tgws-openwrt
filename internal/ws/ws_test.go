@@ -6,12 +6,36 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"tgws/internal/ws"
 	"tgws/internal/ws/wstest"
 )
+
+func TestMissingAcceptIsRejected(t *testing.T) {
+	srv := wstest.NewHTTP(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Upgrade", "websocket")
+		w.Header().Set("Connection", "Upgrade")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	})
+	if c, err := srv.Dialer("/apiws").Dial(context.Background()); err == nil {
+		c.Close()
+		t.Fatal("accepted upgrade without accept header")
+	}
+}
+
+func TestOversizedHeaderIsRejected(t *testing.T) {
+	srv := wstest.NewHTTP(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Large", strings.Repeat("x", 8192))
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	})
+	if c, err := srv.Dialer("/apiws").Dial(context.Background()); err == nil {
+		c.Close()
+		t.Fatal("accepted oversized header")
+	}
+}
 
 func dial(t *testing.T, s *wstest.Server) *ws.Conn {
 	t.Helper()

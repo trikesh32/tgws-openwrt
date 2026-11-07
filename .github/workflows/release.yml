@@ -7,7 +7,7 @@ on:
 
 # Без права записи в contents публикация релиза падает с 403 на последнем шаге.
 permissions:
-  contents: write
+  contents: read
 
 env:
   SDK_ARCH: x86-64-25.12.5
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.27.1'
       - name: Tests
         run: go test ./...
       - name: Build
@@ -124,6 +124,8 @@ jobs:
           if-no-files-found: ignore
 
   publish:
+    permissions:
+      contents: write
     needs: [ binaries, package ]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
@@ -132,7 +134,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: ls -la dist/
+      - name: Hash every release asset
+        run: |
+          cd dist
+          sha256sum tgws-linux-* *.apk > SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*

@@ -10,7 +10,9 @@ BIN="${TGWS_BIN:-/usr/bin/tgws}"
 LIBDIR="${TGWS_LIBDIR:-/usr/libexec/tgws}"
 NFT="${TGWS_NFT:-nft}"
 RUN="${TGWS_RUN:-/var/run}"
-STATS="$RUN/tgws.json"
+STATS="$RUN/tgws/stats.json"
+JAIL="${TGWS_JAIL:-/sbin/ujail}"
+CAPS="${TGWS_CAPS:-/etc/capabilities/tgws.json}"
 RULESET="$RUN/tgws.nft"
 
 # Отметка исходящих сокетов демона. luci-app-trusttunnel возвращает пакеты с
@@ -90,6 +92,19 @@ drop_nft() {
 	rm -f "$RULESET"
 }
 
+prepare_runtime() {
+	[ -x "$JAIL" ] && [ -r "$CAPS" ] || return 1
+	# OpenWrt base-files helpers allocate unused system IDs, with no login shell.
+	gid=$(group_add_next tgws) || return 1
+	user_exists tgws || user_add tgws "" "$gid" || return 1
+	[ "$(id -u tgws)" != "0" ] || return 1
+	# Parent belongs to root. Never chown through an existing symlink.
+	[ ! -L "$RUN/tgws" ] || return 1
+	mkdir -p "$RUN/tgws" || return 1
+	chown tgws:tgws "$RUN/tgws" || return 1
+	chmod 0700 "$RUN/tgws"
+}
+
 start_service() {
 	read_settings
 	[ "$ENABLED" = "1" ] || {
@@ -151,6 +166,12 @@ start_service() {
 		logger -t tgws "error: the daemon rejects dc_ip '$DC_IP', ip_dc '$IP_DC' or fallback_mark '$FALLBACK_MARK'; expected pairs like 2:149.154.167.220 (or none), pairs like 149.154.167.35:2 and a number like 0x9527"
 		return 1
 	fi
+	if ! prepare_runtime; then
+	 drop_nft
+	 rm -f "$STATS"
+	 logger -t tgws "error: cannot prepare unprivileged jail; refusing to start as root"
+	 return 1
+	fi
 	# Файл прошлого экземпляра иначе сошёл бы за готовность нового.
 	rm -f "$STATS"
 
@@ -159,6 +180,16 @@ start_service() {
 	[ -n "$IP_DC" ] && set -- "$@" -ip-dc "$IP_DC"
 	procd_open_instance tgws
 	procd_set_param command "$@"
+	procd_add_jail tgws log requirejail
+	procd_set_param user tgws
+	procd_set_param group tgws
+	procd_set_param capabilities "$CAPS"
+	procd_set_param no_new_privs 1
+	procd_add_jail_mount /etc/ssl/certs
+	procd_add_jail_mount_rw "$RUN/tgws"
+	procd_set_param limits core="0 0" nofile="256 256"
+	# Go's memory limit is soft; packet buffers and admission have hard bounds.
+	procd_set_param env GOMEMLIMIT=64MiB
 	procd_set_param respawn 3600 5 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1

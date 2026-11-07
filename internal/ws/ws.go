@@ -113,7 +113,7 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 	}
 
 	br := bufio.NewReader(tc)
-	line, err := br.ReadString('\n')
+	line, err := readHeaderLine(br)
 	if err != nil {
 		raw.Close()
 		return nil, err
@@ -125,7 +125,7 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 	}
 	hdr := map[string]string{}
 	for i := 0; ; i++ {
-		l, err := br.ReadString('\n')
+		l, err := readHeaderLine(br)
 		if err != nil {
 			raw.Close()
 			return nil, err
@@ -146,15 +146,23 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 		raw.Close()
 		return nil, &HandshakeError{Status: status, Line: line, Location: hdr["location"]}
 	}
-	if acc, ok := hdr["sec-websocket-accept"]; ok {
-		sum := sha1.Sum([]byte(key + guid))
-		if acc != base64.StdEncoding.EncodeToString(sum[:]) {
-			raw.Close()
-			return nil, errors.New("ws: bad Sec-WebSocket-Accept")
-		}
+	sum := sha1.Sum([]byte(key + guid))
+	if hdr["sec-websocket-accept"] != base64.StdEncoding.EncodeToString(sum[:]) {
+		raw.Close()
+		return nil, errors.New("ws: missing or bad Sec-WebSocket-Accept")
 	}
+
 	_ = tc.SetDeadline(time.Time{})
 	return &Conn{c: tc, br: br}, nil
+}
+
+// Bound each header line before allocation (bufio's default buffer is 4 KiB).
+func readHeaderLine(br *bufio.Reader) (string, error) {
+	b, err := br.ReadSlice('\n')
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // Conn — установленное соединение. Send можно звать одновременно с Recv.
@@ -191,6 +199,7 @@ func appendFrame(dst []byte, op byte, payload []byte) []byte {
 func (c *Conn) write(b []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	_ = c.c.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	_, err := c.c.Write(b)
 	return err
 }
@@ -243,14 +252,7 @@ func (c *Conn) Recv() ([]byte, error) {
 func (c *Conn) Close() error {
 	var err error
 	c.once.Do(func() {
-		// Срок записи ставится ДО захвата замка: Send, упёршийся в полный
-		// буфер, держит его, и без срока кадр закрытия ждал бы таймаута TCP
-		// (около четверти часа). Срок обрывает и застрявший Send.
-		_ = c.c.SetWriteDeadline(time.Now().Add(time.Second))
-		_ = c.write(appendFrame(nil, opClose, nil))
-		// tls.Conn.Close шлёт close_notify и сам ставит срок записи в 5 с: при
-		// забитом буфере Close снова ждал бы эти 5 секунд. Кадр закрытия
-		// WebSocket уже ушёл, поэтому закрываем сам TCP-сокет.
+		// Close the socket directly: never wait behind a blocked Send mutex.
 		if nc, ok := c.c.(interface{ NetConn() net.Conn }); ok {
 			err = nc.NetConn().Close()
 		} else {
@@ -282,7 +284,7 @@ func (c *Conn) readFrame() (op byte, payload []byte, fin bool, err error) {
 		}
 		n = binary.BigEndian.Uint64(e[:])
 	}
-	if n > maxMessage {
+	if n > maxMessage || ((op == opCont || op == opText || op == opBinary) && n > uint64(maxMessage-len(c.frag))) {
 		err = errTooLarge
 		return
 	}

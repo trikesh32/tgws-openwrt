@@ -624,3 +624,42 @@ func TestSilentClientIsReleased(t *testing.T) {
 		t.Fatal("an empty connection must not trigger a fallback")
 	}
 }
+
+func TestOversizedPacketClosesClientWithoutForwarding(t *testing.T) {
+	gotBody := make(chan bool, 1)
+	srv := wstest.New(t, func(p *wstest.Peer) {
+		if _, err := p.ReadBinary(); err != nil {
+			gotBody <- false
+			return
+		}
+		_, err := p.ReadBinary()
+		gotBody <- err == nil
+	})
+	h := newHarness(t, netip.MustParseAddrPort("149.154.167.50:443"), srv, nil)
+	c := h.dial(t)
+	defer c.Close()
+	hello, pair := mtproto.NewRelayInit(mtproto.ProtoIntermediate, 2)
+	header := make([]byte, 4)
+	binary.LittleEndian.PutUint32(header, 1<<30)
+	pair.Fwd.XORKeyStream(header, header)
+	if _, err := c.Write(append(hello, header...)); err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("client not closed")
+	} else if e, ok := err.(net.Error); ok && e.Timeout() {
+		t.Fatal("client hung")
+	}
+	select {
+	case body := <-gotBody:
+		if body {
+			t.Fatal("invalid packet reached WebSocket")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream not closed")
+	}
+	if h.dialTCP.Load() != 0 {
+		t.Fatal("rejected packet retried via direct TCP")
+	}
+}

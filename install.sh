@@ -1,13 +1,27 @@
 #!/bin/sh
 # Установщик tgws для OpenWrt 25.12+.
-#   sh -c "$(wget -O - https://raw.githubusercontent.com/NooBiToo/tgws-openwrt/main/install.sh)"
+#   TGWS_VERSION=v0.1.2 sh -c "$(wget -O - https://raw.githubusercontent.com/trikesh32/tgws-openwrt/v0.1.2/install.sh)"
 set -e
 
-REPO="${TGWS_REPO:-NooBiToo/tgws-openwrt}"
+REPO="${TGWS_REPO:-trikesh32/tgws-openwrt}"
 BIN=/usr/bin/tgws
+VERSION="${TGWS_VERSION:-}"
+case "$REPO" in *[!A-Za-z0-9_./-]*|''|*..*) echo 'invalid TGWS_REPO' >&2; exit 1;; esac
+case "$VERSION" in v[0-9]*) ;; *) echo 'Set TGWS_VERSION to an explicit release tag, e.g. v0.1.2' >&2; exit 1;; esac
+case "$VERSION" in *[!A-Za-z0-9._-]*) echo 'invalid release tag' >&2; exit 1;; esac
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Manifest is fetched over verified HTTPS from the selected GitHub release.
+# This checks integrity, not an independent publisher signature.
+verify_asset() {
+	expected=$(awk -v name="$2" 'NF == 2 && $2 == name { print $1 }' "$tmp/SHA256SUMS")
+	[ "${#expected}" = 64 ] || die "missing or duplicate checksum for $2"
+	case "$expected" in *[!0-9a-f]*) die "invalid checksum for $2";; esac
+	actual=$(sha256sum "$1") || die "cannot hash $2"
+	[ "${actual%% *}" = "$expected" ] || die "checksum mismatch for $2"
+}
 
 [ -f /etc/openwrt_release ] || die "this script is for OpenWrt only"
 # Файл существует только на роутере, линтеру его не видно.
@@ -42,8 +56,8 @@ say "== Installing dependencies"
 apk update
 apk add curl ca-bundle firewall4
 
-say "== Fetching the latest release"
-curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" > "$tmp/release.json" \
+say "== Fetching release $VERSION"
+curl -fsSL --max-time 30 "https://api.github.com/repos/$REPO/releases/tags/$VERSION" > "$tmp/release.json" \
 	|| die "cannot reach the GitHub API for $REPO"
 
 # Аргумент подставляется в sed без экранирования метасимволов: вызывать только
@@ -52,14 +66,19 @@ pick_asset() {
 	sed -n 's/.*"browser_download_url": *"\([^"]*'"$1"'\)".*/\1/p' "$tmp/release.json" | head -n1
 }
 
+sums_url=$(pick_asset '\/SHA256SUMS')
+[ -n "$sums_url" ] || die "release has no SHA256SUMS; refusing unchecked installation"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 -o "$tmp/SHA256SUMS" "$sums_url" || die "cannot download checksums"
+
 bin_url=$(pick_asset "\/tgws-linux-$suffix")
 pkg_url=$(pick_asset '\/luci-app-tgws[^"\/]*\.apk')
 i18n_url=$(pick_asset '\/luci-i18n-tgws-ru[^"\/]*\.apk')
-[ -n "$bin_url" ] || die "no tgws-linux-$suffix in the latest release of $REPO"
-[ -n "$pkg_url" ] || die "no luci-app-tgws .apk in the latest release of $REPO"
+[ -n "$bin_url" ] || die "no tgws-linux-$suffix in release $VERSION of $REPO"
+[ -n "$pkg_url" ] || die "no luci-app-tgws .apk in release $VERSION of $REPO"
 
 say "   $bin_url"
-curl -fsSL -o "$tmp/tgws" "$bin_url" || die "failed to download $bin_url"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$tmp/tgws" "$bin_url" || die "failed to download $bin_url"
+verify_asset "$tmp/tgws" "${bin_url##*/}"
 
 # Места под бинарник должно хватать: запись в переполненный overlay обрывается
 # молча, и остаётся обрезанный файл. Нужны две копии (старая рядом с новой до
@@ -70,10 +89,12 @@ if [ -n "$free_kb" ] && [ "$free_kb" -lt $(( size_kb * 2 + 512 )) ]; then
 	die "not enough free space on /usr: ${free_kb} KB free, need about $(( size_kb * 2 + 512 )) KB"
 fi
 say "   $pkg_url"
-curl -fsSL -o "$tmp/pkg.apk" "$pkg_url" || die "failed to download $pkg_url"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$tmp/pkg.apk" "$pkg_url" || die "failed to download $pkg_url"
+verify_asset "$tmp/pkg.apk" "${pkg_url##*/}"
 if [ -n "$i18n_url" ]; then
-	curl -fsSL -o "$tmp/i18n.apk" "$i18n_url" \
-		|| { rm -f "$tmp/i18n.apk"; say "warning: could not download the translation package; the interface will be English"; }
+	curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$tmp/i18n.apk" "$i18n_url" \
+	 || die "failed to download translation package"
+	verify_asset "$tmp/i18n.apk" "${i18n_url##*/}"
 fi
 
 was_running=0
