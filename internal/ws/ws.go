@@ -108,6 +108,7 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 	key := base64.StdEncoding.EncodeToString(keyRaw)
 	req := "GET " + d.Path + " HTTP/1.1\r\n" +
 		"Host: " + d.ServerName + "\r\n" +
+		"User-Agent: tgws-openwrt\r\n" +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + key + "\r\n" +
 		"Sec-WebSocket-Version: 13\r\n" +

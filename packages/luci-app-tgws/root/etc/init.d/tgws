@@ -33,6 +33,7 @@ read_settings() {
 	config_get SUBNETS_URL main subnets_url ""
 	config_get IP_DC main ip_dc ""
 	config_get WORKER_DOMAIN main worker_domain ""
+	config_get WORKER_MODE main worker_mode fallback
 	config_get WORKER_TOKEN main worker_token ""
 	case "$PORT" in
 		''|*[!0-9]*) logger -t tgws "warning: bad port '$PORT', using 5454"; PORT=5454 ;;
@@ -164,6 +165,7 @@ start_service() {
 	[ -n "$FALLBACK_MARK" ] && set -- "$@" -fallback-mark "$FALLBACK_MARK"
 	[ -n "$IP_DC" ] && set -- "$@" -ip-dc "$IP_DC"
 	[ -n "$WORKER_DOMAIN" ] && set -- "$@" -worker-domain "$WORKER_DOMAIN"
+	set -- "$@" -worker-mode "$WORKER_MODE"
 	if ! "$BIN" "$@" -check >/dev/null 2>&1; then
 		drop_nft
 		logger -t tgws "error: the daemon rejects dc_ip, ip_dc, fallback_mark or worker_domain; check settings"
@@ -200,6 +202,7 @@ start_service() {
 	[ -n "$FALLBACK_MARK" ] && set -- "$@" -fallback-mark "$FALLBACK_MARK"
 	[ -n "$IP_DC" ] && set -- "$@" -ip-dc "$IP_DC"
 	[ -n "$WORKER_DOMAIN" ] && set -- "$@" -worker-domain "$WORKER_DOMAIN"
+	set -- "$@" -worker-mode "$WORKER_MODE"
 	[ -f "$WORKER_TOKEN_FILE" ] && set -- "$@" -worker-token-file "$WORKER_TOKEN_FILE"
 	procd_open_instance tgws
 	procd_set_param command "$@"

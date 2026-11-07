@@ -47,7 +47,7 @@ function shq(s) {
 // заметны. Значения приходят в виде tgws.main.port='5454'.
 function config() {
 	let cfg = { enabled: '0', port: '5454', dc_ip: '2:149.154.167.220,4:149.154.167.220',
-	            ip_dc: '', lan_devices: '', fallback_mark: '', subnets_url: '', worker_domain: '' };
+	            ip_dc: '', lan_devices: '', fallback_mark: '', subnets_url: '', worker_domain: '', worker_mode: 'fallback' };
 	let r = sh_out('uci -q show tgws.main');
 	for (let line in split(r.out, '\n')) {
 		let m = match(line, /^tgws\.main\.([a-z_]+)='(.*)'$/);
@@ -292,6 +292,7 @@ return {
 				dc_ip: cfg.dc_ip,
 				ip_dc: cfg.ip_dc,
 				worker_domain: cfg.worker_domain,
+				worker_mode: cfg.worker_mode,
 				fallback_mark: cfg.fallback_mark,
 				lan_devices: cfg.lan_devices,
 				subnets: { count: sub.count, custom: sub.custom, updated: sub.updated },

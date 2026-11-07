@@ -35,6 +35,7 @@ type Config struct {
 	DialWS         func(ctx context.Context, target, domain, path string) (WSConn, error)
 	DialTCP        func(ctx context.Context, addr string) (net.Conn, error)
 	DialWorker     func(ctx context.Context, dst netip.AddrPort) (WSConn, error)
+	WorkerFirst    bool // false: keep Telegram WebSocket first, Worker before direct fallback
 	Stats          *Stats
 	Logf           func(format string, args ...any) // события, о которых стоит знать
 	Debugf         func(format string, args ...any) // ход каждого соединения
@@ -218,18 +219,8 @@ func (s *Server) handle(c net.Conn) {
 	}
 	// Worker carries the original TCP stream, including unknown transports
 	// and DCs. Fall back only before any client bytes have been consumed.
-	if s.cfg.DialWorker != nil && !s.directWorkerBlocked(dst) {
-		conn, err := s.cfg.DialWorker(context.Background(), dst)
-		if err == nil {
-			s.fails.clear("worker:" + dst.String())
-			st.Worker.Add(1)
-			s.cfg.Debugf("[%s] via Cloudflare Worker", label)
-			s.bridgeWorker(c, conn)
-			return
-		}
-		st.WorkerErrors.Add(1)
-		s.fails.cooldown("worker:" + dst.String())
-		s.cfg.Debugf("[%s] Worker unavailable; trying Telegram WebSocket: %v", label, err)
+	if s.cfg.WorkerFirst && s.tryWorker(c, nil, dst, label) {
+		return
 	}
 
 	_ = c.SetReadDeadline(time.Now().Add(s.cfg.HelloTimeout))
@@ -361,6 +352,9 @@ func (s *Server) connectWS(dc int, media bool, target, key, label string) WSConn
 // fallback ведёт соединение прямым TCP на исходный адрес. Прочитанные у
 // клиента байты повторяются дословно, поэтому перешифровка не нужна.
 func (s *Server) fallback(c net.Conn, consumed []byte, dst netip.AddrPort, label, why string) {
+	if !s.cfg.WorkerFirst && s.tryWorker(c, consumed, dst, label) {
+		return
+	}
 	c = &timedConn{Conn: c, timeout: s.cfg.IOTimeout}
 	s.cfg.Stats.Fallback.Add(1)
 	s.cfg.Debugf("[%s] direct: %s", label, why)

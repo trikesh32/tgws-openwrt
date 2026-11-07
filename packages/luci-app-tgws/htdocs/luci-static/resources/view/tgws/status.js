@@ -118,6 +118,10 @@ return view.extend({
 		}
 
 		rows.push(row(_('Cloudflare Worker'), st.worker_domain || _('off')));
+		if (st.worker_domain)
+			rows.push(row(_('Worker routing'), st.worker_mode === 'prefer'
+				? _('Prefer Worker for all Telegram TCP connections')
+				: _('Fallback: Telegram WebSocket, then Worker, then direct TCP')));
 		rows.push(row(_('WebSocket targets'),
 			st.dc_ip === 'none' ? _('none: everything goes the direct way') : E('code', {}, st.dc_ip)));
 		rows.push(row(_('Other Telegram traffic'),

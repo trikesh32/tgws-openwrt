@@ -8,9 +8,77 @@ import (
 	"net/netip"
 	"sync/atomic"
 	"testing"
+	"tgws/internal/mtproto"
 	"tgws/internal/proxy"
 	"tgws/internal/ws/wstest"
 )
+
+func TestWorkerFallbackReplaysOriginalObfuscatedHelloOnce(t *testing.T) {
+	init, _ := mtproto.NewRelayInit(mtproto.ProtoIntermediate, 1)
+	payload := append(init, bytes.Repeat([]byte("opaque-payload"), 10000)...)
+	seen := make(chan []byte, 1)
+	w := wstest.New(t, func(p *wstest.Peer) {
+		var all []byte
+		for len(all) < len(payload) {
+			b, err := p.ReadBinary()
+			if err != nil {
+				return
+			}
+			all = append(all, b...)
+		}
+		seen <- all
+		_, _, _ = p.ReadFrame()
+	})
+	h := newHarness(t, netip.MustParseAddrPort("149.154.175.50:443"), nil, nil, func(cfg *proxy.Config) {
+		cfg.DialWorker = func(ctx context.Context, dst netip.AddrPort) (proxy.WSConn, error) {
+			return w.Dialer("/apiws").Dial(ctx)
+		}
+	})
+	c := h.dial(t)
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := recvBytes(t, seen); !bytes.Equal(got, payload) {
+		t.Fatal("hello lost, duplicated or changed during fallback")
+	}
+	if h.dialTCP.Load() != 0 {
+		t.Fatal("direct TCP used before Worker fallback")
+	}
+}
+
+func TestWorkerFallbackDoesNotReplaceWorkingTelegramWebSocket(t *testing.T) {
+	seen := make(chan []byte, 1)
+	w := wstest.New(t, func(p *wstest.Peer) {
+		if _, err := p.ReadBinary(); err != nil {
+			return
+		}
+		b, err := p.ReadBinary()
+		if err != nil {
+			return
+		}
+		seen <- b
+		_, _, _ = p.ReadFrame()
+	})
+	var workerCalls atomic.Int32
+	h := newHarness(t, netip.MustParseAddrPort("149.154.167.51:443"), w, nil, func(cfg *proxy.Config) {
+		cfg.DialWorker = func(context.Context, netip.AddrPort) (proxy.WSConn, error) {
+			workerCalls.Add(1)
+			return nil, errors.New("must not use Worker")
+		}
+	})
+	c := h.dial(t)
+	payload := append([]byte{0xee, 0xee, 0xee, 0xee}, intermediatePacket([]byte("test"))...)
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	_ = recvBytes(t, seen)
+	if workerCalls.Load() != 0 || h.dialTCP.Load() != 0 {
+		t.Fatal("working native route was replaced")
+	}
+	if h.srv.Stats().Snapshot().WS != 1 {
+		t.Fatal("native WS not counted")
+	}
+}
 
 func TestWorkerPreservesRawStreamUnknownDC(t *testing.T) {
 	// This is deliberately not MTProto; Worker must not parse/re-encrypt it.
@@ -33,6 +101,7 @@ func TestWorkerPreservesRawStreamUnknownDC(t *testing.T) {
 	})
 	dst := netip.MustParseAddrPort("149.154.175.211:5222")
 	h := newHarness(t, dst, nil, nil, func(cfg *proxy.Config) {
+		cfg.WorkerFirst = true
 		cfg.DialWorker = func(ctx context.Context, got netip.AddrPort) (proxy.WSConn, error) {
 			if got != dst {
 				return nil, errors.New("lost original destination")
@@ -68,6 +137,7 @@ func TestWorkerHandshakeFailureFallsBackWithoutLosingBytesAndCoolsDown(t *testin
 	dc := newFakeDC(t, len(payload))
 	var calls atomic.Int32
 	h := newHarness(t, netip.MustParseAddrPort("149.154.167.51:80"), nil, dc, func(cfg *proxy.Config) {
+		cfg.WorkerFirst = true
 		cfg.DialWorker = func(context.Context, netip.AddrPort) (proxy.WSConn, error) {
 			calls.Add(1)
 			return nil, errors.New("HTTP 502")

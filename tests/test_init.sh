@@ -52,6 +52,7 @@ config_get() {
 		fallback_mark) eval "$1=\${U_FB:-$4}" ;;
 		ip_dc) eval "$1=\${U_IPDC:-$4}" ;;
 		worker_domain) eval "$1=\${U_WORKER:-$4}" ;;
+		worker_mode) eval "$1=\${U_WORKER_MODE:-$4}" ;;
 		worker_token) eval "$1=\${U_TOKEN:-$4}" ;;
 		*) eval "$1=\"$4\"" ;;
 	esac
@@ -85,7 +86,7 @@ daemon_up() { echo '{}' > "$STATS"; }
 reset() {
 	: > "$CALLS"
 	rm -f "$CALLS.ruleset" "$STATS"
-	U_ENABLED=0; U_PORT=; U_DC_IP=; U_LAN=; U_FB=; U_IPDC=; U_WORKER=; U_TOKEN=
+	U_ENABLED=0; U_PORT=; U_DC_IP=; U_LAN=; U_FB=; U_IPDC=; U_WORKER=; U_TOKEN=; U_WORKER_MODE=
 	NFT_RC=0; export NFT_RC
 	TGWS_CHECK_RC=0; export TGWS_CHECK_RC
 }
@@ -161,6 +162,7 @@ U_ENABLED=1; U_WORKER=relay.example.workers.dev; U_TOKEN=0123456789abcdef0123456
 start_service; rc=$?
 assert_eq "0" "$rc" "worker: starts"
 assert_contains "$(calls)" "-worker-domain relay.example.workers.dev" "worker: domain passed"
+assert_contains "$(calls)" "-worker-mode fallback" "worker: fallback by default"
 assert_contains "$(calls)" "-worker-token-file $RUN/tgws-worker.token" "worker: token file passed"
 assert_contains "$(calls)" "mount-ro $RUN/tgws-worker.token" "worker: token mounted read-only"
 assert_contains "$(calls)" "/etc/resolv.conf" "worker: jail can resolve domain"

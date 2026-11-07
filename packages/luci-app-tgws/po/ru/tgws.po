@@ -524,3 +524,15 @@ msgstr "Через Cloudflare Worker"
 
 msgid "Worker connection errors"
 msgstr "Ошибки подключения к Worker"
+
+msgid "Cloudflare Worker for Telegram TCP traffic. Clear the domain to disable. Keep the fallback mode if routing all connections through the Worker slows down chats."
+msgstr "Cloudflare Worker для TCP-трафика Telegram. Очистите домен для отключения. Если направление всех соединений через Worker замедляет чаты, используйте резервный режим."
+
+msgid "Worker routing"
+msgstr "Режим Worker"
+
+msgid "Fallback: Telegram WebSocket, then Worker, then direct TCP"
+msgstr "Резервный: Telegram WebSocket → Worker → прямой TCP"
+
+msgid "Prefer Worker for all Telegram TCP connections"
+msgstr "Сначала Worker для всех TCP-соединений Telegram"

@@ -36,6 +36,7 @@ func main() {
 	verbose := flag.Bool("v", false, "подробный журнал по каждому соединению")
 	showVersion := flag.Bool("version", false, "напечатать версию и выйти")
 	workerDomain := flag.String("worker-domain", "", "домен Cloudflare Worker; пусто — прежний путь Telegram WebSocket")
+	workerMode := flag.String("worker-mode", "fallback", "fallback — Worker перед прямым TCP; prefer — Worker первым для всех TCP-соединений")
 	workerTokenFile := flag.String("worker-token-file", "", "файл с секретом Worker (секрет не передаётся в аргументах процесса)")
 	doProbe := flag.Bool("probe", false, "проверить путь через WebSocket до Telegram (JSON в stdout) и выйти; используется диагностикой в LuCI")
 	probeDC := flag.Int("dc", 2, "для -probe: номер дата-центра")
@@ -51,6 +52,9 @@ func main() {
 	domain, err := worker.Domain(*workerDomain)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *workerMode != "fallback" && *workerMode != "prefer" {
+		log.Fatal("worker-mode: expected fallback or prefer")
 	}
 	token, err := worker.ReadToken(*workerTokenFile)
 	if err != nil {
@@ -156,6 +160,7 @@ func main() {
 		Debugf: debugf,
 	}
 	if domain != "" {
+		cfg.WorkerFirst = *workerMode == "prefer"
 		cfg.DialWorker = func(ctx context.Context, dst netip.AddrPort) (proxy.WSConn, error) {
 			return worker.Dialer(domain, token, dst, *mark).Dial(ctx)
 		}

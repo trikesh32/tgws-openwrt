@@ -1,13 +1,39 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"sync"
 )
 
-func (s *Server) directWorkerBlocked(dst netip.AddrPort) bool {
-	return s.fails.blocked("worker:" + dst.String())
+func (s *Server) tryWorker(c net.Conn, consumed []byte, dst netip.AddrPort, label string) bool {
+	key := "worker:" + dst.String()
+	if s.cfg.DialWorker == nil || s.fails.blocked(key) {
+		return false
+	}
+	w, err := s.cfg.DialWorker(context.Background(), dst)
+	if err != nil {
+		s.cfg.Stats.WorkerErrors.Add(1)
+		s.fails.cooldown(key)
+		s.cfg.Debugf("[%s] Worker unavailable: %v", label, err)
+		return false
+	}
+	s.fails.clear(key)
+	s.cfg.Stats.Worker.Add(1)
+	s.cfg.Debugf("[%s] via Cloudflare Worker", label)
+	// Hello/discovery may already have read part of the ORIGINAL TCP stream.
+	// Replay it exactly once, before reading more from the client. Never retry
+	// another transport after application bytes have been sent upstream.
+	if len(consumed) > 0 {
+		if err := w.Send(consumed); err != nil {
+			_ = w.Close()
+			return true
+		}
+		s.cfg.Stats.BytesUp.Add(int64(len(consumed)))
+	}
+	s.bridgeWorker(c, w)
+	return true
 }
 
 // The TCP endpoint may split or coalesce data arbitrarily. No MTProto packet

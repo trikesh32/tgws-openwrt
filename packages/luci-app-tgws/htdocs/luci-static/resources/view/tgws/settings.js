@@ -70,7 +70,7 @@ return view.extend({
 		};
 
 		o = s.taboption('worker', form.Value, 'worker_domain', _('Worker domain'),
-			_('When set, Telegram TCP connections try this Worker first. If opening the Worker fails, the existing Telegram WebSocket route is used. Clear the domain to disable.'));
+			_('Cloudflare Worker for Telegram TCP traffic. Clear the domain to disable. Keep the fallback mode if routing all connections through the Worker slows down chats.'));
 		o.placeholder = 'tgws-relay.example.workers.dev';
 		o.optional = true;
 		o.validate = function(section_id, value) {
@@ -79,6 +79,11 @@ return view.extend({
 			    !/^[0-9.]+$/.test(value))) return true;
 			return _('Enter a hostname without https://, path or port');
 		};
+		o = s.taboption('worker', form.ListValue, 'worker_mode', _('Worker routing'));
+		o.value('fallback', _('Fallback: Telegram WebSocket, then Worker, then direct TCP'));
+		o.value('prefer', _('Prefer Worker for all Telegram TCP connections'));
+		o.default = 'fallback';
+		o.rmempty = false;
 		o = s.taboption('worker', form.Value, 'worker_token', _('Worker access token'),
 			_('Use the same secret as TGWS_TOKEN in your Worker. Leave empty only for a Worker that does not require authentication. This is not a Cloudflare API token.'));
 		o.password = true;
